@@ -1,0 +1,14 @@
+{
+  "name": "pi-web-research-extension",
+  "version": "2.0.0",
+  "description": "Pi extension tools for web search, Markdown fetch, and research bundles.",
+  "type": "commonjs",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "dependencies": {
+    "@mozilla/readability": "0.6.0",
+    "jsdom": "29.1.1",
+    "turndown": "7.2.4"
+  }
+}

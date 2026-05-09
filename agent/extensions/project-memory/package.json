@@ -1,0 +1,9 @@
+{
+  "name": "pi-project-memory-extension",
+  "version": "1.0.0",
+  "description": "Project-local memory.md runtime support for Pi.",
+  "type": "commonjs",
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
