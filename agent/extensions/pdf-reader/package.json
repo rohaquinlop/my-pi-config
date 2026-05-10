@@ -1,0 +1,14 @@
+{
+  "name": "pi-pdf-reader-extension",
+  "version": "1.0.0",
+  "description": "Pi extension tool for extracting text from PDFs.",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "pdf-parse": "1.1.1"
+  }
+}

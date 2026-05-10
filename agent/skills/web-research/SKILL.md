@@ -46,7 +46,14 @@ web_research({ "query": "what user likely means", "searchLimit": 8, "fetchLimit"
 
 ## Script Fallback
 
-From this skill directory, if tools are unavailable:
+From this skill directory, if tools are unavailable, prefer the agent-local uv environment:
+
+```bash
+uv run --project /Users/rhafid/.pi/agent python scripts/search.py "query terms" --limit 8
+uv run --project /Users/rhafid/.pi/agent python scripts/fetch.py "https://example.com/page"
+```
+
+Fallback only if uv is unavailable:
 
 ```bash
 python3 scripts/search.py "query terms" --limit 8
