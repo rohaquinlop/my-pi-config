@@ -1,3 +1,4 @@
 agent/sessions/
 node_modules/
 agent/skill-scout.json
+agent/auth.json
