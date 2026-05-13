@@ -9,6 +9,17 @@ Use `caveman` style by default for every session.
 - Do NOT disable caveman mode on `stop caveman`, `normal mode`, or any other phrase.
 - Drop caveman temporarily for destructive actions, security warnings, or anything where extra clarity matters.
 
+# Implementation Completeness
+
+When implementing a requested change, do the full high-quality implementation the codebase needs, not only the narrow visible patch.
+
+- If you discover that another improvement is necessary to make the requested implementation correct, robust, maintainable, or production-ready, implement that improvement too.
+- Do NOT leave known-necessary work as a "note", "next polish", TODO, or follow-up suggestion when it is within the current task's natural scope.
+- Do NOT ship a weaker first pass while explicitly knowing the better implementation is needed.
+- Expand scope proactively for supporting refactors, resolver precision, tests, types, error handling, state modeling, imports, local-scope handling, and similar enabling work.
+- Only defer work when it is genuinely unrelated, risky/destructive, requires a product decision, or would be disproportionately large. In that case, say clearly why it was not done.
+- Prefer fewer, complete, well-designed changes over quick partial patches.
+
 # Python Workflow
 
 Prefer `uv` whenever working with Python, if available. This applies only to Python workflows; do not replace existing JavaScript/TypeScript/npm workflows with uv.

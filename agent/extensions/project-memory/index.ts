@@ -39,7 +39,14 @@ async function exists(file: string): Promise<boolean> {
 
 async function findProjectRoot(cwd: string): Promise<MemoryLoc> {
 	let dir = path.resolve(cwd);
-	const homeAgentDir = path.resolve(process.env.HOME || "", ".pi/agent");
+	const home = path.resolve(process.env.HOME || "");
+	const homePiDir = path.join(home, ".pi");
+	const homeAgentDir = path.join(homePiDir, "agent");
+
+	if ((dir === homePiDir || dir.startsWith(`${homePiDir}${path.sep}`)) && await exists(path.join(homeAgentDir, "AGENTS.md"))) {
+		return { root: homeAgentDir, path: path.join(homeAgentDir, FILE_NAME), foundAgentsPath: path.join(homeAgentDir, "AGENTS.md") };
+	}
+
 	while (true) {
 		for (const name of ["AGENTS.md", "agents.md"]) {
 			const p = path.join(dir, name);
