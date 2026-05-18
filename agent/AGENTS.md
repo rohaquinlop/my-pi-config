@@ -31,3 +31,11 @@ Prefer `uv` whenever working with Python, if available. This applies only to Pyt
 - Use `uv pip ...` only for legacy pip-compatible workflows.
 - Avoid global `pip install`; do not manually edit `uv.lock`.
 - For command examples, read `UV.md` in this directory.
+
+# Skill Scout Dedup
+
+Before calling `skill_scout_record`, check existing skills to avoid duplicates:
+
+- List installed skills: `ls ~/.pi/agent/skills/` and `.pi/skills/`.
+- Match on functional overlap, not exact name. `git-commit` covers commit message workflows → discard `commit-message`. `web-research` covers web search → discard `internet-search`.
+- Only record when no existing skill covers the workflow.

@@ -164,14 +164,30 @@ Examples:
 
 Use Skill Scout as the detection and approval layer; use this skill as the authoring guidance.
 
+### Before Recording: Dedup Check (Mandatory)
+
+Before calling `skill_scout_record`, check all existing skills to avoid duplicates:
+
+1. List installed skills: `ls ~/.pi/agent/skills/`, `.pi/skills/`, and any configured skill paths.
+2. Compare the proposed skill name and description against every installed skill's `name` and `description` in its `SKILL.md` frontmatter.
+3. If any existing skill covers the same workflow (even under a different name), discard the duplicate and do NOT record it.
+4. Match on functional overlap, not exact name match. Examples:
+   - `git-commit` already covers commit message generation → discard `commit-message`
+   - `caveman-commit` already covers compact commit messages → discard `commit-shortener`
+   - `web-research` already covers web search + fetch → discard `internet-search`
+5. Only record when no existing skill covers the workflow.
+
+### Recording Workflow
+
 When a repeated workflow appears:
 
-1. Record it with `skill_scout_record`.
-2. Do not create or approve a skill unless the user explicitly asks.
-3. Use `/skill-scout status` to inspect candidates.
-4. Use `/skill-scout draft <name>` to create a draft.
-5. Review and improve the draft with this skill.
-6. Use `/skill-scout approve <name>` only after user approval.
+1. Run the dedup check above.
+2. Record it with `skill_scout_record` only if no duplicate exists.
+3. Do not create or approve a skill unless the user explicitly asks.
+4. Use `/skill-scout status` to inspect candidates.
+5. Use `/skill-scout draft <name>` to create a draft.
+6. Review and improve the draft with this skill.
+7. Use `/skill-scout approve <name>` only after user approval.
 
 For skill-authoring candidates, improve the generated draft beyond the generic template:
 
