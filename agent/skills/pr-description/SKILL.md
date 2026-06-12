@@ -8,8 +8,16 @@ description: >
 
 When writing a PR description:
 
-1. Run `git diff main...HEAD` to see all changes on this branch
-2. Write a description in a md file named `PR_DESCRIPTION.md` following this format:
+1. Run `git diff main...HEAD` to see all changes on this branch.
+2. Create or overwrite `PR_DESCRIPTION.md` in the repository root.
+3. Write the PR description into `PR_DESCRIPTION.md` following this format.
+4. Final response must mention the file path and briefly summarize what was written.
+
+Output requirements:
+
+- MUST use the write tool to create or update `PR_DESCRIPTION.md`.
+- MUST NOT only print the PR description in chat unless the user explicitly asks for chat-only output.
+- If `PR_DESCRIPTION.md` was not written, the task is incomplete.
 
 ## Title suggestion
 
