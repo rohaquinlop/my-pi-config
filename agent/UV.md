@@ -2,23 +2,6 @@
 
 Use `uv` for Python work whenever possible. Source: https://docs.astral.sh/uv/guides/
 
-## Local Pi agent environment
-
-This agent has a uv project at `/Users/rhafid/.pi/agent`.
-
-```bash
-cd /Users/rhafid/.pi/agent
-uv sync
-uv run python --version
-uv add <package>
-```
-
-For Python helpers in Pi extensions/skills, run through the agent-local project:
-
-```bash
-uv run --project /Users/rhafid/.pi/agent python <script.py> [...args]
-```
-
 ## Agent rule
 
 - Prefer `uv` over raw `python`, `pip`, `venv`, `pipx`, or ad-hoc global installs for Python work only.
@@ -206,16 +189,16 @@ Docs: https://docs.astral.sh/uv/pip/
 
 ## Quick decision table
 
-| Need | Use |
-|---|---|
-| Run project command | `uv run <cmd>` |
-| Run Python script | `uv run script.py` |
-| One-off script dependency | `uv run --with <pkg> script.py` |
-| Add project dependency | `uv add <pkg>` |
-| Remove project dependency | `uv remove <pkg>` |
-| Sync env | `uv sync` |
-| Run one-off CLI tool | `uvx <tool>` |
-| Install persistent CLI tool | `uv tool install <tool>` |
-| Create project | `uv init [dir]` |
-| Create venv for legacy flow | `uv venv` |
-| pip-compatible install | `uv pip install ...` |
+| Need                        | Use                             |
+| --------------------------- | ------------------------------- |
+| Run project command         | `uv run <cmd>`                  |
+| Run Python script           | `uv run script.py`              |
+| One-off script dependency   | `uv run --with <pkg> script.py` |
+| Add project dependency      | `uv add <pkg>`                  |
+| Remove project dependency   | `uv remove <pkg>`               |
+| Sync env                    | `uv sync`                       |
+| Run one-off CLI tool        | `uvx <tool>`                    |
+| Install persistent CLI tool | `uv tool install <tool>`        |
+| Create project              | `uv init [dir]`                 |
+| Create venv for legacy flow | `uv venv`                       |
+| pip-compatible install      | `uv pip install ...`            |
