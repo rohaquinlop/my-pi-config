@@ -3,7 +3,7 @@ name: planner
 description: Creates implementation plans by scouting code and researching requirements
 tools: subagent, read, grep, find, ls
 subagent_agents: scout, researcher
-model: deepseek/deepseek-v4-flash
+model: nan/deepseek-v4-flash
 thinking: high
 ---
 

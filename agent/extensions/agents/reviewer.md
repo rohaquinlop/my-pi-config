@@ -3,7 +3,7 @@ name: reviewer
 description: Code and plan review specialist for quality, security, and correctness
 tools: subagent, read, grep, find, ls
 subagent_agents: scout
-model: deepseek/deepseek-v4-flash
+model: nan/deepseek-v4-flash
 thinking: high
 ---
 

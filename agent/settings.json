@@ -1,10 +1,10 @@
 {
   "lastChangelogVersion": "0.79.1",
-  "defaultProvider": "deepseek",
+  "defaultProvider": "nan",
   "defaultModel": "deepseek-v4-flash",
   "defaultThinkingLevel": "xhigh",
   "hideThinkingBlock": true,
   "packages": [
-    "git:github.com/amosblomqvist/pi-subagents"
+    "git:github.com/rohaquinlop/pi-subagents"
   ]
 }
