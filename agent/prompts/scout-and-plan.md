@@ -1,1 +1,0 @@
-/Users/rhafid/.bun/install/global/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent/prompts/scout-and-plan.md
