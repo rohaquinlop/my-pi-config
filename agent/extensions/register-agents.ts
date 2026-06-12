@@ -1,18 +1,17 @@
 /**
- * Register Custom Subagents & Generate Delegation Rules
+ * Register Custom Subagents & Enforce Delegation
  *
  * Discovers agent markdown files from the `agents/` directory (relative to
  * this extension) and registers them with the pi-subagents extension via
  * the globalThis.__pi_subagents bridge.
  *
- * Also:
+ * Enforcement:
+ * - Blocks direct tool use (write, edit, bash, web_search, web_fetch, grep, find)
+ *   in the main agent process via the `tool_call` event.
+ * - Only `subagent`, `read`, and `ls` are allowed in the main process.
+ * - Child subagent processes (PI_IS_SUBAGENT=1) have full tool access.
  * - Injects auto-generated delegation rules at the TOP of the system prompt
- *   with MANDATORY language (no hardcoded cases — all rules derived from
- *   agent .md frontmatter).
- * - Provides a pre-processor hook (via `before_agent_start`) that classifies
- *   the user's prompt against agent descriptions and injects a routing
- *   directive message before the main LLM sees the request.
- * - Intercepts grep/find/bash-with-grep and redirects to scout.
+ *   telling the LLM which agent to use for which task.
  *
  * Agent file format (frontmatter + markdown body):
  *   ---
@@ -28,10 +27,8 @@
  * Adding a new .md file to agents/ automatically:
  * - Registers the agent with the subagent bridge
  * - Generates enforcement rules in the system prompt
- * - Adds intent classification for the pre-processor
  */
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
@@ -111,200 +108,10 @@ function loadCustomAgents(): AgentMeta[] {
 }
 
 /**
- * Load agent .md files from the pi-subagents package's own agents/ directory
- * (scout, researcher, worker). These are merged into the delegation rules
- * so the enforcement table covers all available subagents, not just custom ones.
- */
-function loadSubagentsPackageAgents(): AgentMeta[] {
-	const pkgDir = path.join(
-		os.homedir(),
-		".pi",
-		"agent",
-		"git",
-		"github.com",
-		"rohaquinlop",
-		"pi-subagents",
-		"agents",
-	);
-
-	const agents: AgentMeta[] = [];
-	if (!fs.existsSync(pkgDir)) return agents;
-
-	for (const entry of fs.readdirSync(pkgDir)) {
-		if (!entry.endsWith(".md")) continue;
-		const filePath = path.join(pkgDir, entry);
-		try {
-			const content = fs.readFileSync(filePath, "utf-8");
-			const { frontmatter, body } =
-				parseFrontmatter<Record<string, string>>(content);
-			if (!frontmatter.name) continue;
-
-			const tools = (frontmatter.tools || "")
-				.split(",")
-				.map((t) => t.trim())
-				.filter(Boolean);
-
-			const rawSubagentAgents = frontmatter.subagent_agents;
-			const subagentAgents = rawSubagentAgents
-				? rawSubagentAgents.split(",").map((t) => t.trim()).filter(Boolean)
-				: undefined;
-
-			agents.push({
-				name: frontmatter.name,
-				description: frontmatter.description || "",
-				tools,
-				model: frontmatter.model || "nan/deepseek-v4-flash",
-				thinking: frontmatter.thinking || "medium",
-				systemPrompt: body,
-				filePath,
-				subagentAgents,
-			});
-		} catch {
-			// skip unparseable files
-		}
-	}
-
-	return agents;
-}
-
-/**
- * Load ALL agents: custom ones from extensions/agents/ + built-in ones from
- * the pi-subagents package.
+ * Load ALL agents from extensions/agents/.
  */
 function loadAllAgents(): AgentMeta[] {
-	const custom = loadCustomAgents();
-	const pkg = loadSubagentsPackageAgents();
-	// Merge, deduplicating by name (custom overrides package)
-	const names = new Set<string>();
-	const all: AgentMeta[] = [];
-	for (const a of [...custom, ...pkg]) {
-		if (!names.has(a.name)) {
-			names.add(a.name);
-			all.push(a);
-		}
-	}
-	return all;
-}
-
-// ── Intent Classification ────────────────────────────────────────────
-
-/**
- * Classify a user prompt against available agents.
- * Returns ALL agents scoring above threshold, sorted by relevance.
- *
- * Uses keyword scoring from agent name + description.
- * Threshold: at least 2 keyword hits or explicit name mention.
- * Supports parallel dispatch — multiple agents can match one prompt
- * (e.g. "implement and review" → [planner, reviewer]).
- */
-function classifyIntent(prompt: string, agents: AgentMeta[]): AgentMeta[] {
-	const lowerPrompt = prompt.toLowerCase();
-
-	const scored: { agent: AgentMeta; score: number }[] = [];
-
-	for (const agent of agents) {
-		let score = 0;
-
-		// Explicit name mention = strong signal
-		if (lowerPrompt.includes(agent.name.toLowerCase())) {
-			score += 3;
-		}
-
-		// Score from description keywords
-		const desc = agent.description.toLowerCase();
-		const keywords = desc
-			.split(/[\s—–,]+/)
-			.map((w) => w.replace(/^[^a-z]+|[^a-z]+$/g, ""))
-			.filter((w) => w.length > 3 && !["with", "that", "this", "from", "their"].includes(w));
-
-		for (const kw of keywords) {
-			if (lowerPrompt.includes(kw)) {
-				score++;
-			}
-		}
-
-		// Tool-based heuristic
-		if (agent.name === "planner" && /plan|implement|design|architecture|build/.test(lowerPrompt)) {
-			score += 2;
-		}
-		if (agent.name === "reviewer" && /review|check|audit|validate|quality/.test(lowerPrompt)) {
-			score += 2;
-		}
-		if (agent.name === "scout" && /find|search|explore|trace|locate|where|current changes|what changed|explain changes|summarize changes|uncommitted|overview|codebase|architecture|how does|how is|project state|git (diff|status|log|changes|show)/.test(lowerPrompt)) {
-			score += 2;
-		}
-		if (agent.name === "researcher" && /research|search web|look up|find docs|api docs|documentation/.test(lowerPrompt)) {
-			score += 2;
-		}
-
-		if (score >= 2) {
-			scored.push({ agent, score });
-		}
-	}
-
-	// Sort descending by score
-	scored.sort((a, b) => b.score - a.score);
-	return scored.map((s) => s.agent);
-}
-
-/**
- * Build a routing directive message for one or more matched agents.
- * This is injected before the user's prompt to guide the LLM.
- * Supports parallel dispatch: when multiple agents match, the directive
- * lists them in priority order and suggests chaining/parallelization.
- */
-function buildRoutingDirective(agents: AgentMeta[]): string {
-	if (agents.length === 0) return "";
-
-	const lines: string[] = [];
-
-	if (agents.length === 1) {
-		const agent = agents[0];
-		lines.push(`[Pre-processor routing] The user's request matches **${agent.name}**: ${agent.description}`);
-		lines.push("");
-		lines.push(`You MUST dispatch \`agent: ${agent.name}\` with the full user context before using direct tools.`);
-		if (agent.name === "planner") lines.push("Do not write, edit, or implement anything until the planner returns a plan.");
-		if (agent.name === "reviewer") lines.push("Dispatch the reviewer agent to validate before finalizing.");
-		if (agent.name === "scout") lines.push("Dispatch scout for codebase recon. Use the findings to orient yourself.");
-		if (agent.name === "researcher") lines.push("Dispatch researcher for external knowledge before answering.");
-		if (agent.name === "worker") lines.push("The worker handles implementation. Dispatch it with full context.");
-	} else {
-		lines.push("[Pre-processor routing] The user's request matches multiple subagents:");
-		lines.push("");
-
-		// Build ordered list with descriptions
-		const ordered = [...agents];
-		// Reorder: scout first (recon), then researcher (knowledge), then planner (plan),
-		// then worker (implement), then reviewer (review). Unknown agents at the end.
-		const priority = ["scout", "researcher", "planner", "worker", "reviewer"];
-		ordered.sort((a, b) => {
-			const ia = priority.indexOf(a.name);
-			const ib = priority.indexOf(b.name);
-			return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
-		});
-
-		for (let i = 0; i < ordered.length; i++) {
-			const agent = ordered[i];
-			lines.push(`${i + 1}. **${agent.name}**: ${agent.description}`);
-		}
-
-		lines.push("");
-
-		// Suggest ordering
-		const names = ordered.map((a) => a.name);
-		const hasChainable = names.some((n) => ["scout", "planner", "reviewer"].includes(n));
-		if (hasChainable) {
-			const chainOrder = names.filter((n) => priority.includes(n)).sort(
-				(a, b) => priority.indexOf(a) - priority.indexOf(b),
-			);
-			lines.push(`Suggested order: ${chainOrder.join(" → ")}`);
-			lines.push("Dispatch independent agents in parallel. Chain dependent ones (scout → planner → worker → reviewer).");
-		} else {
-			lines.push("You MAY dispatch these agents in parallel using multiple `subagent` tool calls in the same turn.");
-		}
-	}
-
-	return lines.join("\n");
+	return loadCustomAgents();
 }
 
 // ── Delegation Rule Generation ──────────────────────────────────────
@@ -422,16 +229,24 @@ function generateDelegationRules(allAgents: AgentMeta[]): string {
 const TOOL_RESTRICTIONS = [
 	"## Tool Restrictions",
 	"",
-	"To prevent context bloat, the following operations are blocked and will be redirected:",
+	"To protect your context window, direct tool use is restricted in the main agent.",
+	"You MUST delegate work to subagents via the `subagent` tool.",
 	"",
-	"| Blocked operation | Alternative |",
-	"|---|---|",
-	"| `grep` tool | Use `subagent` with `agent: scout` for code searches |",
-	"| `find` tool | Use `subagent` with `agent: scout` for file discovery |",
-	"| `bash` with `grep`/`rg`/`find`/`ag`/`ack` | Use `subagent` with `agent: scout` for code exploration |",
+	"| Tool | Status | Delegate to |",
+	"|---|---|---|",
+	"| `subagent` | ✅ Allowed | Primary mechanism for delegating work |",
+	"| `read` | ✅ Allowed | Quick file checks at known paths |",
+	"| `ls` | ✅ Allowed | Directory orientation |",
+	"| `write` | ❌ Blocked | `worker` agent |",
+	"| `edit` | ❌ Blocked | `worker` agent |",
+	"| `bash` | ❌ Blocked | `worker` agent |",
+	"| `web_search` | ❌ Blocked | `researcher` agent |",
+	"| `web_fetch` | ❌ Blocked | `researcher` agent |",
+	"| `grep` | ❌ Blocked | `scout` agent |",
+	"| `find` | ❌ Blocked | `scout` agent |",
 	"",
-	"All other tools (`read`, `ls`, `bash`, `edit`, `write`, `web_search`, `web_fetch`, `subagent`) are",
-	"available directly with no restrictions.",
+	"When blocked, the tool returns a reason with available agents and an example.",
+	"Subagent child processes have full tool access — restrictions apply only to this main agent.",
 	"",
 ].join("\n");
 
@@ -445,16 +260,14 @@ export default function (pi: ExtensionAPI) {
 		agentsRegistered = false;
 	});
 
-	// ── Pre-processor: classify + route + enforce ──
-	//
-	// 1. Register custom agents with the pi-subagents bridge
-	// 2. Classify the user's prompt against all agent descriptions
-	// 3. If matched, inject a routing directive message BEFORE the user's prompt
-	// 4. Inject delegation rules at the TOP of the system prompt (not appended)
 	pi.on("before_agent_start", async (event) => {
+		// Skip delegation rules in child processes — they have full tool access
+		// and the rules waste 1-2k tokens of their limited context.
+		if (process.env.PI_IS_SUBAGENT === "1") return;
+
 		const customAgents = loadCustomAgents();
 
-		// Register custom agents with bridge if not yet done
+		// Register custom agents with the pi-subagents bridge
 		if (!agentsRegistered) {
 			const bridge = (globalThis as any).__pi_subagents as
 				| { registerAgent: (config: any) => void; unregisterAgent: (name: string) => void }
@@ -483,53 +296,39 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		// Classify intent — returns ALL matched agents (supports parallel dispatch)
-		const allAgents = loadAllAgents();
-		const matchedAgents = classifyIntent(event.prompt, allAgents);
-
-		const result: {
-			systemPrompt?: string;
-			message?: { customType: string; content: string; display: boolean };
-		} = {};
-
-		// Inject routing directive if any agents matched
-		if (matchedAgents.length > 0) {
-			result.message = {
-				customType: "routing",
-				content: buildRoutingDirective(matchedAgents),
-				display: true,
-			};
-		}
-
 		// Build delegation rules (auto-generated, at TOP of system prompt)
+		const allAgents = loadAllAgents();
 		const rules = generateDelegationRules(allAgents);
 
 		// Prepend rules + restrictions BEFORE the existing system prompt
-		result.systemPrompt = rules + "\n\n" + TOOL_RESTRICTIONS + "\n\n" + event.systemPrompt;
-
-		return result;
+		return {
+			systemPrompt: rules + "\n\n" + TOOL_RESTRICTIONS + "\n\n" + event.systemPrompt,
+		};
 	});
 
-	// Intercept grep-like commands (bash, native grep/find tools) and redirect to scout
-	pi.on("tool_call", (event, ctx) => {
-		// Block native grep and find — use scout instead (context bloat)
-		if (event.toolName === "grep" || event.toolName === "find") {
-			return {
-				block: true,
-				reason:
-					"Broad code searches bloat your context window. Use `subagent` with `agent: scout` for code exploration — it runs in an isolated process and returns compressed summaries. The scout can grep, find, and read files without filling your context.",
-			};
-		}
+	// Tool-level enforcement: block non-essential tools in the main agent process.
+	// Child subagents (PI_IS_SUBAGENT=1) have full access.
+	pi.on("tool_call", (event) => {
+		const isChildProcess = process.env.PI_IS_SUBAGENT === "1";
 
-		// Block bash commands that run grep/rg/find — use scout instead
-		if (event.toolName === "bash") {
-			const cmd = (event.input as any).command || "";
-			const searchPatterns = /\b(grep|rg|find|ag|ack|git\s+grep)\b/;
-			if (searchPatterns.test(cmd)) {
+		// Child processes: no blocking — scout, worker, researcher etc. need full tool access
+		if (isChildProcess) return;
+
+		// Main agent: block everything except subagent, read, ls
+		if (agentsRegistered) {
+			const allowed = new Set(["subagent", "read", "ls"]);
+			if (!allowed.has(event.toolName)) {
+				const currentAgents = loadAllAgents();
+				const agentList = currentAgents.length > 0
+					? currentAgents.map((a) => `${a.name} (${a.description})`).join("\n  - ")
+					: "(none — add agent .md files to extensions/agents/)";
 				return {
 					block: true,
 					reason:
-						"Broad code searches bloat your context. Use subagent agent:scout for code exploration instead — it runs in an isolated process and returns compressed summaries.",
+						`Direct use of \`${event.toolName}\` is blocked to protect your context window. ` +
+						`Use the \`subagent\` tool to delegate this task.\n\n` +
+						`Available agents:\n  - ${agentList}\n\n` +
+						`Example: { "agent": "scout", "task": "Find all auth-related files in src/" }`,
 				};
 			}
 		}

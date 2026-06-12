@@ -38,7 +38,10 @@ For detailed uv usage, read [`UV.md`](./UV.md) in this directory.
     │   ├── register-agents.ts                # Subagent discovery, pre-processor, auto-delegation
     │   ├── agents/
     │   │   ├── planner.md                    # Planning subagent
-    │   │   └── reviewer.md                   # Code review subagent
+    │   │   ├── researcher.md                 # Web research subagent
+    │   │   ├── reviewer.md                   # Code review subagent
+    │   │   ├── scout.md                      # Codebase recon subagent
+    │   │   └── worker.md                     # General-purpose worker subagent
     │   ├── web-research/                     # Web research tools (npm package)
     │   │   └── index.ts                      # web_search, web_fetch, web_research
     │   └── pdf-reader/                       # PDF extraction tool (npm package)
@@ -65,7 +68,7 @@ Five agents are available via the `subagent` tool. The MANDATORY SUBAGENT DELEGA
 | `scout` | Fast codebase recon — explores files, finds patterns, maps architecture | read, grep, find, ls |
 | `worker` | General-purpose code reading, writing, and editing | read, write, edit, safe_bash, web_search, web_fetch, subagent |
 
-Pre-processor auto-classifies user prompts against agent descriptions and injects routing directives. Agents from `extensions/agents/` and the `pi-subagents` package are all included.
+Pre-processor auto-classifies user prompts against agent descriptions and injects routing directives. All agents are defined in `extensions/agents/`.
 
 ## Extensions
 
