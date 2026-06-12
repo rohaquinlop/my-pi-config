@@ -1,7 +1,7 @@
 {
-  "lastChangelogVersion": "0.79.1",
-  "defaultProvider": "nan",
-  "defaultModel": "deepseek-v4-flash",
+  "lastChangelogVersion": "0.79.2",
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-v4-pro",
   "defaultThinkingLevel": "xhigh",
   "hideThinkingBlock": true,
   "packages": [
