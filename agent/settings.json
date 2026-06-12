@@ -1,7 +1,10 @@
 {
-  "lastChangelogVersion": "0.74.0",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-5.5",
-  "defaultThinkingLevel": "medium",
-  "hideThinkingBlock": true
+  "lastChangelogVersion": "0.79.1",
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-v4-flash",
+  "defaultThinkingLevel": "xhigh",
+  "hideThinkingBlock": true,
+  "packages": [
+    "git:github.com/amosblomqvist/pi-subagents"
+  ]
 }
