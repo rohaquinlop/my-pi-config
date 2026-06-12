@@ -280,6 +280,10 @@ export default function (pi: ExtensionAPI) {
 			if (bridge) {
 				for (const agent of customAgents) {
 					try {
+						// Unregister first to avoid "already registered" errors.
+						// pi-subagents loads its own agents at startup; the session_start
+						// handler also resets agentsRegistered, so re-entry is expected.
+						try { bridge.unregisterAgent(agent.name); } catch {}
 						bridge.registerAgent({
 							name: agent.name,
 							description: agent.description,
@@ -361,7 +365,7 @@ export default function (pi: ExtensionAPI) {
 				const sub = firstCmd[1] || "";
 				// Block: grep, rg, find, ag, ack as base commands
 				// Block: git grep specifically (not other git subcommands)
-				if (/^(grep|rg|ag|ack|find)$/.test(base)) {
+				if (/^(grep|rg|ag|ack|find|sed|awk)$/.test(base)) {
 					return {
 						block: true,
 						reason:
