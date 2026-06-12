@@ -349,7 +349,27 @@ export default function (pi: ExtensionAPI) {
 			// Block bash commands that run grep/rg/find/ag/ack (bypass attempt)
 			if (event.toolName === "bash") {
 				const cmd = (event.input as any).command || "";
-				if (/\b(grep|rg|find|ag|ack|git\s+grep)\b/.test(cmd)) {
+				// Extract the first command (skip env vars, pipes).
+				// This avoids false positives from words like "grep" in commit messages.
+				const firstCmd = cmd
+					.trim()
+					.replace(/^([A-Z_]+=\S+\s+)*/, "")
+					.split("|")[0]
+					.trim()
+					.split(/\s+/);
+				const base = firstCmd[0] || "";
+				const sub = firstCmd[1] || "";
+				// Block: grep, rg, find, ag, ack as base commands
+				// Block: git grep specifically (not other git subcommands)
+				if (/^(grep|rg|ag|ack|find)$/.test(base)) {
+					return {
+						block: true,
+						reason:
+							"Broad code searches bloat your context. Use `subagent` with `agent: scout` " +
+							"for code exploration — it runs in an isolated process and returns compressed summaries.",
+					};
+				}
+				if (base === "git" && sub === "grep") {
 					return {
 						block: true,
 						reason:
