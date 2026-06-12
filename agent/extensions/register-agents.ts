@@ -6,9 +6,10 @@
  * the globalThis.__pi_subagents bridge.
  *
  * Enforcement:
- * - Blocks direct tool use (write, edit, bash, web_search, web_fetch, grep, find)
- *   in the main agent process via the `tool_call` event.
- * - Only `subagent`, `read`, and `ls` are allowed in the main process.
+ * - Blocks high-context tools (grep, find, web_search) and bash commands
+ *   containing grep-like searches in the main agent process.
+ * - Action tools (write, edit, bash) and orientation tools (read, ls) are
+ *   allowed directly — they have low context cost.
  * - Child subagent processes (PI_IS_SUBAGENT=1) have full tool access.
  * - Injects auto-generated delegation rules at the TOP of the system prompt
  *   telling the LLM which agent to use for which task.
@@ -224,26 +225,29 @@ function generateDelegationRules(allAgents: AgentMeta[]): string {
 }
 
 /**
- * Build the tool restrictions block (same as before, but tweaked).
+ * Build the tool restrictions block.
+ *
+ * Only high-context tools are blocked. Action tools (write, edit, bash) and
+ * orientation tools (read, ls) are allowed — they have low context cost.
  */
 const TOOL_RESTRICTIONS = [
 	"## Tool Restrictions",
 	"",
-	"To protect your context window, direct tool use is restricted in the main agent.",
-	"You MUST delegate work to subagents via the `subagent` tool.",
+	"To protect your context window, tools that produce high-volume output are blocked.",
+	"Use the `subagent` tool to delegate exploration and research tasks.",
 	"",
-	"| Tool | Status | Delegate to |",
+	"| Tool | Status | Reason |",
 	"|---|---|---|",
 	"| `subagent` | ✅ Allowed | Primary mechanism for delegating work |",
-	"| `read` | ✅ Allowed | Quick file checks at known paths |",
+	"| `read` | ✅ Allowed | Targeted file reads |",
 	"| `ls` | ✅ Allowed | Directory orientation |",
-	"| `write` | ❌ Blocked | `worker` agent |",
-	"| `edit` | ❌ Blocked | `worker` agent |",
-	"| `bash` | ❌ Blocked | `worker` agent |",
-	"| `web_search` | ❌ Blocked | `researcher` agent |",
-	"| `web_fetch` | ❌ Blocked | `researcher` agent |",
-	"| `grep` | ❌ Blocked | `scout` agent |",
-	"| `find` | ❌ Blocked | `scout` agent |",
+	"| `write` | ✅ Allowed | Writing files |",
+	"| `edit` | ✅ Allowed | Editing files |",
+	"| `bash` | ✅ Allowed | Running commands (except grep-like searches) |",
+	"| `grep` | ❌ Blocked | High context cost — delegate to `scout` agent |",
+	"| `find` | ❌ Blocked | High context cost — delegate to `scout` agent |",
+	"| `web_search` | ❌ Blocked | High context cost — delegate to `researcher` agent |",
+	"| `web_fetch` | ✅ Allowed | Direct URL fetches |",
 	"",
 	"When blocked, the tool returns a reason with available agents and an example.",
 	"Subagent child processes have full tool access — restrictions apply only to this main agent.",
@@ -306,18 +310,28 @@ export default function (pi: ExtensionAPI) {
 		};
 	});
 
-	// Tool-level enforcement: block non-essential tools in the main agent process.
+	// Tool-level enforcement: block high-context tools in the main agent process.
 	// Child subagents (PI_IS_SUBAGENT=1) have full access.
+	//
+	// Blocked: grep, find, web_search (high context cost — flood the main
+	// agent's context with search results and file listings).
+	//
+	// Allowed: read, ls, write, edit, bash, web_fetch, subagent.
+	// These have low context cost or are needed for direct action.
+	//
+	// bash with grep-like commands is also blocked (the LLM could use
+	// `bash grep` to bypass the grep block).
 	pi.on("tool_call", (event) => {
 		const isChildProcess = process.env.PI_IS_SUBAGENT === "1";
 
 		// Child processes: no blocking — scout, worker, researcher etc. need full tool access
 		if (isChildProcess) return;
 
-		// Main agent: block everything except subagent, read, ls
 		if (agentsRegistered) {
-			const allowed = new Set(["subagent", "read", "ls"]);
-			if (!allowed.has(event.toolName)) {
+			const blocked = new Set(["grep", "find", "web_search"]);
+
+			// Block native grep, find, web_search
+			if (blocked.has(event.toolName)) {
 				const currentAgents = loadAllAgents();
 				const agentList = currentAgents.length > 0
 					? currentAgents.map((a) => `${a.name} (${a.description})`).join("\n  - ")
@@ -330,6 +344,19 @@ export default function (pi: ExtensionAPI) {
 						`Available agents:\n  - ${agentList}\n\n` +
 						`Example: { "agent": "scout", "task": "Find all auth-related files in src/" }`,
 				};
+			}
+
+			// Block bash commands that run grep/rg/find/ag/ack (bypass attempt)
+			if (event.toolName === "bash") {
+				const cmd = (event.input as any).command || "";
+				if (/\b(grep|rg|find|ag|ack|git\s+grep)\b/.test(cmd)) {
+					return {
+						block: true,
+						reason:
+							"Broad code searches bloat your context. Use `subagent` with `agent: scout` " +
+							"for code exploration — it runs in an isolated process and returns compressed summaries.",
+					};
+				}
 			}
 		}
 	});
