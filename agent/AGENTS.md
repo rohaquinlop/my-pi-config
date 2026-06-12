@@ -9,6 +9,12 @@ When implementing a requested change, do the full high-quality implementation th
 - Only defer work when it is genuinely unrelated, risky/destructive, requires a product decision, or would be disproportionately large. In that case, say clearly why it was not done.
 - Prefer fewer, complete, well-designed changes over quick partial patches.
 
+# Python Workflow
+
+Prefer `uv` whenever working with Python, if available. This applies only to Python workflows; do not replace existing JavaScript/TypeScript/npm workflows with uv.
+
+For detailed uv usage, read [`UV.md`](./UV.md) in this directory.
+
 # Skill Scout Dedup
 
 Before calling `skill_scout_record`, check existing skills to avoid duplicates:
