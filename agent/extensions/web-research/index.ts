@@ -378,6 +378,26 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			"Prefer official/primary sources from web_search results before fetching pages.",
 		],
 		parameters: searchParams,
+		renderShell: "self",
+		renderCall(args, theme) {
+			let text = theme.fg("toolTitle", `[web_search] `);
+			text += theme.fg("accent", args.query);
+			if (args.limit) text += theme.fg("dim", ` (limit ${args.limit})`);
+			return new Text(text, 0, 0);
+		},
+		renderResult(result, { isPartial }, theme) {
+			if (isPartial) return new Text(theme.fg("warning", "searching..."), 0, 0);
+			const details = result.details as { results?: Array<{ title: string; source: string }> } | undefined;
+			const results = details?.results;
+			const count = results?.length ?? 0;
+			let text = theme.fg("success", `${count} result${count === 1 ? "" : "s"}`);
+			if (count > 0 && results) {
+				const first = results[0];
+				if (first) text += `\n${theme.fg("dim", first.title)}`;
+				if (count > 1) text += `\n${theme.fg("muted", `... ${count - 1} more`)}`;
+			}
+			return new Text(text, 0, 0);
+		},
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const limit = clamp(params.limit, 8, 1, 20);
 			onUpdate?.({ content: [{ type: "text", text: `Searching web: ${params.query}` }] });
@@ -397,6 +417,22 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			"Use web_fetch markdownPath as the canonical web context; read markdownPath when full context is needed.",
 		],
 		parameters: fetchParams,
+		renderShell: "self",
+		renderCall(args, theme) {
+			let text = theme.fg("toolTitle", `[web_fetch] `);
+			text += theme.fg("accent", args.url.length > 70 ? `${args.url.slice(0, 67)}...` : args.url);
+			return new Text(text, 0, 0);
+		},
+		renderResult(result, { isPartial }, theme) {
+			if (isPartial) return new Text(theme.fg("warning", "fetching..."), 0, 0);
+			const d = result.details as { status?: number; title?: string; length?: number; contentType?: string; cached?: boolean } | undefined;
+			if (!d) return new Text(theme.fg("error", "[fetch failed]"), 0, 0);
+			let text = d.status && d.status >= 200 && d.status < 300 ? theme.fg("success", `HTTP ${d.status}`) : theme.fg("error", `HTTP ${d.status ?? "?"}`);
+			if (d.cached) text += theme.fg("dim", " (cached)");
+			if (d.title) text += `\n${theme.fg("accent", d.title)}`;
+			if (d.length) text += `\n${theme.fg("dim", `${d.length.toLocaleString()} chars`)}`;
+			return new Text(text, 0, 0);
+		},
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const textLimit = clamp(params.textLimit, DEFAULT_TEXT_LIMIT, 1_000, 100_000);
 			const includeMarkdown = params.includeMarkdown !== false;
@@ -417,6 +453,21 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			"Use web_research to build context before answering; cite source URLs from the returned index when web data affects the answer.",
 		],
 		parameters: researchParams,
+		renderShell: "self",
+		renderCall(args, theme) {
+			let text = theme.fg("toolTitle", `[web_research] `);
+			text += theme.fg("accent", args.query);
+			if (args.searchLimit) text += theme.fg("dim", ` (search ${args.searchLimit})`);
+			return new Text(text, 0, 0);
+		},
+		renderResult(result, { isPartial }, theme) {
+			if (isPartial) return new Text(theme.fg("warning", "researching..."), 0, 0);
+			const details = result.details as { searched?: number; fetched?: number; query?: string } | undefined;
+			if (!details) return new Text(theme.fg("error", "[research failed]"), 0, 0);
+			let text = theme.fg("success", `${details.fetched ?? 0} fetched`);
+			text += theme.fg("dim", ` / ${details.searched ?? 0} searched`);
+			return new Text(text, 0, 0);
+		},
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const searchLimit = clamp(params.searchLimit, 8, 1, 20);
 			const fetchLimit = clamp(params.fetchLimit, DEFAULT_FETCH_LIMIT, 1, MAX_FETCH_LIMIT);
