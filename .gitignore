@@ -3,5 +3,6 @@ node_modules/
 agent/skill-scout.json
 agent/auth.json
 agent/MEMORY.md
+agent/settings.json
 
 __pycache__/
