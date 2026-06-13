@@ -68,7 +68,16 @@ Five agents are available via the `subagent` tool. The MANDATORY SUBAGENT DELEGA
 | `scout` | Fast codebase recon — explores files, finds patterns, maps architecture | read, grep, find, ls |
 | `worker` | General-purpose code reading, writing, and editing | read, write, edit, safe_bash, web_search, web_fetch, subagent |
 
-Pre-processor auto-classifies user prompts against agent descriptions and injects routing directives. All agents are defined in `extensions/agents/`.
+Pre-processor auto-classifies user prompts against agent descriptions and injects routing directives. Agents are defined in both `extensions/agents/` (user-defined, takes precedence) and `git/.../pi-subagents/agents/` (built-in defaults).
+
+### Agent Precedence
+
+pi-subagents natively loads agents from two directories at startup:
+
+1. **Built-in agents** from `pi-subagents/agents/` (scout, researcher, worker)
+2. **User-defined agents** from `extensions/agents/` (scout, researcher, worker, planner, reviewer)
+
+User agents with the same `name` override the corresponding built-in agent. User-only agents (planner, reviewer) are added to the registry. This applies to child subagent processes too — nested subagents use the same merged definitions, restricted by `PI_SUBAGENT_ALLOWED`.
 
 ## Extensions
 
@@ -77,7 +86,7 @@ Pre-processor auto-classifies user prompts against agent descriptions and inject
 - **working-words.ts** — Real-time animated tool activity status
 - **plan-clarifier-ui.ts** — `clarification_ui` tool with ↑↓/Space/Enter, custom answers, dig-deeper
 - **nan-builders.ts** — NaN Builders custom provider with dynamic model fetching
-- **register-agents.ts** — Agent discovery, pre-processor, auto-generated enforcement table, blocks grep/find/bash-grep → redirects to scout
+- **register-agents.ts** — Generates auto-enforcement table, tool restrictions, and tool_call blocks (grep/find/web_search/bash-grep → redirect to scout). Bridge registration is a fallback for runtime-added agents; the primary override is native in pi-subagents.
 - **web-research/** — 3 tools: web_search, web_fetch, web_research
 - **pdf-reader/** — read_pdf tool with page selection
 

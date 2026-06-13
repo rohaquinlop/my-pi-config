@@ -281,8 +281,9 @@ export default function (pi: ExtensionAPI) {
 				for (const agent of customAgents) {
 					try {
 						// Unregister first to avoid "already registered" errors.
-						// pi-subagents loads its own agents at startup; the session_start
-						// handler also resets agentsRegistered, so re-entry is expected.
+						// pi-subagents natively loads agents from both built-in and user
+						// directories at startup. The bridge is a fallback for agents
+						// added after startup.
 						try { bridge.unregisterAgent(agent.name); } catch {}
 						bridge.registerAgent({
 							name: agent.name,
@@ -295,7 +296,12 @@ export default function (pi: ExtensionAPI) {
 							...(agent.subagentAgents ? { subagentAgents: agent.subagentAgents } : {}),
 						});
 					} catch (err) {
-						console.warn(`[register-agents] Failed to register agent ${agent.name}:`, err);
+						// "already registered" is expected when pi-subagents has already
+						// loaded the user agent natively — suppress the noise.
+						const msg = err instanceof Error ? err.message : String(err);
+						if (!msg.includes("already registered")) {
+							console.warn(`[register-agents] Failed to register agent ${agent.name}:`, err);
+						}
 					}
 				}
 				agentsRegistered = true;
