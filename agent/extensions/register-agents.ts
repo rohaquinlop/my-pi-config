@@ -349,7 +349,7 @@ export default function (pi: ExtensionAPI) {
 				return {
 					block: true,
 					reason:
-						`​BLOCKED​` +
+						`__PI_BLOCKED__` +
 						`Direct use of \`${event.toolName}\` is blocked to protect your context window. ` +
 						`Use the \`subagent\` tool to delegate this task.\n\n` +
 						`Available agents:\n  - ${agentList}\n\n` +
@@ -376,7 +376,7 @@ export default function (pi: ExtensionAPI) {
 					return {
 						block: true,
 						reason:
-							"​BLOCKED​" +
+							"__PI_BLOCKED__" +
 							"Broad code searches bloat your context. Use `subagent` with `agent: scout` " +
 							"for code exploration — it runs in an isolated process and returns compressed summaries.",
 					};
@@ -385,7 +385,7 @@ export default function (pi: ExtensionAPI) {
 					return {
 						block: true,
 						reason:
-							"​BLOCKED​" +
+							"__PI_BLOCKED__" +
 							"Broad code searches bloat your context. Use `subagent` with `agent: scout` " +
 							"for code exploration — it runs in an isolated process and returns compressed summaries.",
 					};

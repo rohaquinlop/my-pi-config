@@ -24,7 +24,7 @@ export default function (pi: ExtensionAPI) {
 	function isBlockedResult(content: unknown): boolean {
 		if (!content || typeof content !== "object") return false;
 		const text = (content as any).text;
-		return typeof text === "string" && /\u200B|​BLOCKED​/.test(text);
+		return typeof text === "string" && text.startsWith("__PI_BLOCKED__");
 	}
 
 	// ── Read tool ──
