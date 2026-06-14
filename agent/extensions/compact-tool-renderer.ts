@@ -24,7 +24,11 @@ export default function (pi: ExtensionAPI) {
 	function isBlockedResult(content: unknown): boolean {
 		if (!content || typeof content !== "object") return false;
 		const text = (content as any).text;
-		return typeof text === "string" && text.startsWith("__PI_BLOCKED__");
+		return typeof text === "string" && (
+			text.startsWith("__PI_BLOCKED__") ||
+			text.includes("is blocked to protect your context window") ||
+			text.includes("Broad code searches bloat your context")
+		);
 	}
 
 	// ── Read tool ──

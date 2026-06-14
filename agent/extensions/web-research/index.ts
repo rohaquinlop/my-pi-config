@@ -389,7 +389,7 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			if (isPartial) return new Text(theme.fg("warning", "searching..."), 0, 0);
 			const content = result.content[0];
 			// Suppress blocked-tool messages from chat
-			if (content?.type === "text" && content.text.startsWith("__PI_BLOCKED__")) return new Text("", 0, 0);
+			if (content?.type === "text" && (content.text.startsWith("__PI_BLOCKED__") || content.text.includes("is blocked to protect your context window") || content.text.includes("Broad code searches bloat your context"))) return new Text("", 0, 0);
 			const details = result.details as { results?: Array<{ title: string; source: string }> } | undefined;
 			const results = details?.results;
 			const count = results?.length ?? 0;
