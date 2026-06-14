@@ -385,7 +385,7 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			if (args.limit) text += theme.fg("dim", ` (limit ${args.limit})`);
 			return new Text(text, 0, 0);
 		},
-		renderResult(result, { isPartial }, theme, context) {
+		renderResult(result, { isPartial, expanded }, theme, context) {
 			if (isPartial) return new Text(theme.fg("warning", "searching..."), 0, 0);
 			const content = result.content[0];
 			// Suppress blocked-tool messages from chat
@@ -400,9 +400,18 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			const count = results?.length ?? 0;
 			let text = theme.fg("success", `${count} result${count === 1 ? "" : "s"}`);
 			if (count > 0 && results) {
-				const first = results[0];
-				if (first) text += `\n${theme.fg("dim", first.title)}`;
-				if (count > 1) text += `\n${theme.fg("muted", `... ${count - 1} more`)}`;
+				if (expanded) {
+					// Show up to 5 result titles in expanded view
+					const preview = results.slice(0, 5);
+					for (const r of preview) {
+						text += `\n${theme.fg("dim", r.title)}`;
+					}
+					if (count > 5) text += `\n${theme.fg("muted", `... ${count - 5} more`)}`;
+				} else {
+					const first = results[0];
+					if (first) text += `\n${theme.fg("dim", first.title)}`;
+					if (count > 1) text += `\n${theme.fg("muted", `... ${count - 1} more`)}`;
+				}
 			}
 			return new Text(text, 0, 0);
 		},
