@@ -18,6 +18,15 @@ import { Text } from "@earendil-works/pi-tui";
 export default function (pi: ExtensionAPI) {
 	const cwd = process.cwd();
 
+	// ── Helpers ──
+
+	/** Check if a tool result is a blocked-call message (should not render). */
+	function isBlockedResult(content: unknown): boolean {
+		if (!content || typeof content !== "object") return false;
+		const text = (content as any).text;
+		return typeof text === "string" && /\u200B|​BLOCKED​/.test(text);
+	}
+
 	// ── Read tool ──
 
 	const originalRead = createReadTool(cwd);
@@ -44,12 +53,13 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { isPartial }, theme) {
+		renderResult(result, { isPartial, expanded }, theme) {
 			if (isPartial) return new Text(theme.fg("warning", "reading..."), 0, 0);
 
 			const details = result.details as ReadToolDetails | undefined;
 			const content = result.content[0];
 
+			if (isBlockedResult(content)) return new Text("", 0, 0);
 			if (content?.type === "image") return new Text(theme.fg("success", "[image loaded]"), 0, 0);
 			if (content?.type !== "text") return new Text(theme.fg("error", "[no content]"), 0, 0);
 
@@ -61,13 +71,15 @@ export default function (pi: ExtensionAPI) {
 				text += theme.fg("warning", ` (truncated ${details.truncation.totalLines})`);
 			}
 
-			// Show first N lines as preview
-			const previewLines = lines.slice(0, 5);
-			if (previewLines.length > 0 && previewLines.some((l) => l.trim())) {
-				for (const line of previewLines) {
-					text += `\n${theme.fg("dim", line)}`;
+			// Show first N lines as preview (only in expanded view)
+			if (expanded) {
+				const previewLines = lines.slice(0, 5);
+				if (previewLines.length > 0 && previewLines.some((l) => l.trim())) {
+					for (const line of previewLines) {
+						text += `\n${theme.fg("dim", line)}`;
+					}
+					if (count > 5) text += `\n${theme.fg("muted", `... ${count - 5} more`)}`;
 				}
-				if (count > 5) text += `\n${theme.fg("muted", `... ${count - 5} more`)}`;
 			}
 
 			return new Text(text, 0, 0);
@@ -94,11 +106,14 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { isPartial }, theme) {
+		renderResult(result, { isPartial, expanded }, theme) {
 			if (isPartial) return new Text(theme.fg("warning", "running..."), 0, 0);
 
 			const details = result.details as BashToolDetails | undefined;
 			const content = result.content[0];
+
+			if (isBlockedResult(content)) return new Text("", 0, 0);
+
 			const output = content?.type === "text" ? content.text : "";
 
 			// Match both "exit code: N" and "Command exited with code N"
@@ -121,20 +136,22 @@ export default function (pi: ExtensionAPI) {
 				text += theme.fg("warning", " truncated");
 			}
 
-			// Show last few lines if output exists and not just exit code
-			const outputLines = output.split("\n");
-			const nonExitLines = outputLines.filter((l) => {
-				const t = l.trim();
-				return t && !t.startsWith("exit code:") && !t.startsWith("Command exited with code");
-			});
-			if (nonExitLines.length > 0) {
-				const maxPreview = Math.min(nonExitLines.length, 3);
-				const preview = nonExitLines.slice(-maxPreview);
-				for (const line of preview) {
-					text += `\n${theme.fg("dim", line)}`;
-				}
-				if (nonExitLines.length > 3) {
-					text += `\n${theme.fg("muted", `... ${nonExitLines.length - 3} more`)}`;
+			// Show last few lines (only in expanded view)
+			if (expanded) {
+				const outputLines = output.split("\n");
+				const nonExitLines = outputLines.filter((l) => {
+					const t = l.trim();
+					return t && !t.startsWith("exit code:") && !t.startsWith("Command exited with code");
+				});
+				if (nonExitLines.length > 0) {
+					const maxPreview = Math.min(nonExitLines.length, 3);
+					const preview = nonExitLines.slice(-maxPreview);
+					for (const line of preview) {
+						text += `\n${theme.fg("dim", line)}`;
+					}
+					if (nonExitLines.length > 3) {
+						text += `\n${theme.fg("muted", `... ${nonExitLines.length - 3} more`)}`;
+					}
 				}
 			}
 
@@ -253,12 +270,13 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { isPartial }, theme) {
+		renderResult(result, { isPartial, expanded }, theme) {
 			if (isPartial) return new Text(theme.fg("warning", "searching..."), 0, 0);
 
 			const details = result.details as GrepToolDetails | undefined;
 			const content = result.content[0];
 
+			if (isBlockedResult(content)) return new Text("", 0, 0);
 			if (content?.type !== "text") return new Text(theme.fg("error", "[no results]"), 0, 0);
 
 			const lines = content.text.split("\n").filter((l) => l.trim());
@@ -269,12 +287,14 @@ export default function (pi: ExtensionAPI) {
 				text += theme.fg("warning", " (truncated)");
 			}
 
-			// Show first few lines
-			const preview = lines.slice(0, 3);
-			for (const line of preview) {
-				text += `\n${theme.fg("dim", line)}`;
+			// Show first few lines (only in expanded view)
+			if (expanded) {
+				const preview = lines.slice(0, 3);
+				for (const line of preview) {
+					text += `\n${theme.fg("dim", line)}`;
+				}
+				if (count > 3) text += `\n${theme.fg("muted", `... ${count - 3} more`)}`;
 			}
-			if (count > 3) text += `\n${theme.fg("muted", `... ${count - 3} more`)}`;
 
 			return new Text(text, 0, 0);
 		},
@@ -300,12 +320,13 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { isPartial }, theme) {
+		renderResult(result, { isPartial, expanded }, theme) {
 			if (isPartial) return new Text(theme.fg("warning", "listing..."), 0, 0);
 
 			const details = result.details as LsToolDetails | undefined;
 			const content = result.content[0];
 
+			if (isBlockedResult(content)) return new Text("", 0, 0);
 			if (content?.type !== "text") return new Text(theme.fg("error", "[no entries]"), 0, 0);
 
 			const lines = content.text.split("\n").filter((l) => l.trim());
@@ -316,12 +337,14 @@ export default function (pi: ExtensionAPI) {
 				text += theme.fg("warning", " (truncated)");
 			}
 
-			// Show first few entries
-			const preview = lines.slice(0, 5);
-			for (const line of preview) {
-				text += `\n${theme.fg("dim", line)}`;
+			// Show first few entries (only in expanded view)
+			if (expanded) {
+				const preview = lines.slice(0, 5);
+				for (const line of preview) {
+					text += `\n${theme.fg("dim", line)}`;
+				}
+				if (count > 5) text += `\n${theme.fg("muted", `... ${count - 5} more`)}`;
 			}
-			if (count > 5) text += `\n${theme.fg("muted", `... ${count - 5} more`)}`;
 
 			return new Text(text, 0, 0);
 		},
@@ -348,12 +371,13 @@ export default function (pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 
-		renderResult(result, { isPartial }, theme) {
+		renderResult(result, { isPartial, expanded }, theme) {
 			if (isPartial) return new Text(theme.fg("warning", "searching..."), 0, 0);
 
 			const details = result.details as FindToolDetails | undefined;
 			const content = result.content[0];
 
+			if (isBlockedResult(content)) return new Text("", 0, 0);
 			if (content?.type !== "text") return new Text(theme.fg("error", "[no results]"), 0, 0);
 
 			const lines = content.text.split("\n").filter((l) => l.trim());
@@ -364,12 +388,14 @@ export default function (pi: ExtensionAPI) {
 				text += theme.fg("warning", " (truncated)");
 			}
 
-			// Show first few results
-			const preview = lines.slice(0, 5);
-			for (const line of preview) {
-				text += `\n${theme.fg("dim", line)}`;
+			// Show first few results (only in expanded view)
+			if (expanded) {
+				const preview = lines.slice(0, 5);
+				for (const line of preview) {
+					text += `\n${theme.fg("dim", line)}`;
+				}
+				if (count > 5) text += `\n${theme.fg("muted", `... ${count - 5} more`)}`;
 			}
-			if (count > 5) text += `\n${theme.fg("muted", `... ${count - 5} more`)}`;
 
 			return new Text(text, 0, 0);
 		},
