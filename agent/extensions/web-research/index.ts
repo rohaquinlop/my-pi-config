@@ -431,14 +431,14 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			text += theme.fg("accent", args.url.length > 70 ? `${args.url.slice(0, 67)}...` : args.url);
 			return new Text(text, 0, 0);
 		},
-		renderResult(result, { isPartial }, theme) {
-			if (isPartial) return new Text(theme.fg("warning", "fetching..."), 0, 0);
+		renderResult(result, { isPartial, expanded }, theme) {
+			if (isPartial) return new Text(theme.fg("warning", "searching..."), 0, 0);
 			const d = result.details as { status?: number; title?: string; length?: number; contentType?: string; cached?: boolean } | undefined;
 			if (!d) return new Text(theme.fg("error", "[fetch failed]"), 0, 0);
 			let text = d.status && d.status >= 200 && d.status < 300 ? theme.fg("success", `HTTP ${d.status}`) : theme.fg("error", `HTTP ${d.status ?? "?"}`);
 			if (d.cached) text += theme.fg("dim", " (cached)");
-			if (d.title) text += `\n${theme.fg("accent", d.title)}`;
-			if (d.length) text += `\n${theme.fg("dim", `${d.length.toLocaleString()} chars`)}`;
+			if (d.title) text += expanded ? `\n${theme.fg("accent", d.title)}` : theme.fg("dim", ` ${d.title.slice(0, 50)}${d.title.length > 50 ? "…" : ""}`);
+			if (d.length && expanded) text += `\n${theme.fg("dim", `${d.length.toLocaleString()} chars`)}`;
 			return new Text(text, 0, 0);
 		},
 		async execute(_toolCallId, params, signal, onUpdate) {
@@ -468,12 +468,15 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			if (args.searchLimit) text += theme.fg("dim", ` (search ${args.searchLimit})`);
 			return new Text(text, 0, 0);
 		},
-		renderResult(result, { isPartial }, theme) {
+		renderResult(result, { isPartial, expanded }, theme) {
 			if (isPartial) return new Text(theme.fg("warning", "researching..."), 0, 0);
 			const details = result.details as { searched?: number; fetched?: number; query?: string } | undefined;
 			if (!details) return new Text(theme.fg("error", "[research failed]"), 0, 0);
 			let text = theme.fg("success", `${details.fetched ?? 0} fetched`);
 			text += theme.fg("dim", ` / ${details.searched ?? 0} searched`);
+			if (expanded && details.query) {
+				text += `\n${theme.fg("dim", `"${details.query}"`)}`;
+			}
 			return new Text(text, 0, 0);
 		},
 		async execute(_toolCallId, params, signal, onUpdate) {
@@ -524,7 +527,7 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			const preview = `${lines.slice(0, textLimit)}${lines.length > textLimit ? "\n...[truncated in tool result; read indexPath for full bundle]" : ""}`;
 			return {
 				content: [{ type: "text", text: `${JSON.stringify({ workdir, indexPath, query: params.query, searched: results.length, fetched: fetched.length }, null, 2)}\n\n${preview}` }],
-				details: { workdir, indexPath, query: params.query, results, fetched },
+				details: { workdir, indexPath, query: params.query, searched: results.length, fetched: fetched.length },
 			};
 		},
 	});
