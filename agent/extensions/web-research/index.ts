@@ -387,6 +387,9 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 		},
 		renderResult(result, { isPartial }, theme) {
 			if (isPartial) return new Text(theme.fg("warning", "searching..."), 0, 0);
+			const content = result.content[0];
+			// Suppress blocked-tool messages from chat
+			if (content?.type === "text" && /\u200B|​BLOCKED​/.test(content.text)) return new Text("", 0, 0);
 			const details = result.details as { results?: Array<{ title: string; source: string }> } | undefined;
 			const results = details?.results;
 			const count = results?.length ?? 0;
