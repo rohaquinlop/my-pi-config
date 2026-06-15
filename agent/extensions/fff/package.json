@@ -1,0 +1,15 @@
+{
+  "name": "pi-fff-local",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local FFF-powered file search extension for pi",
+  "type": "module",
+  "dependencies": {
+    "@ff-labs/fff-node": "*"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  }
+}
