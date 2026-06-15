@@ -117,29 +117,7 @@ const DEFAULT_FIND_LIMIT = 30;
 const GREP_MAX_LINE_LENGTH = 500;
 const MENTION_MAX_RESULTS = 20;
 
-type FffMode = "tools-and-ui" | "tools-only" | "override";
-const VALID_MODES: FffMode[] = ["tools-and-ui", "tools-only", "override"];
 
-interface ToolNames {
-  grep: string;
-  find: string;
-  multiGrep: string;
-}
-
-const FFF_TOOL_NAMES: ToolNames = {
-  grep: "ffgrep",
-  find: "fffind",
-  multiGrep: "fff-multi-grep",
-};
-const OVERRIDE_TOOL_NAMES: ToolNames = {
-  grep: "grep",
-  find: "find",
-  multiGrep: "multi_grep",
-};
-
-function resolveToolNames(mode: FffMode): ToolNames {
-  return mode === "override" ? OVERRIDE_TOOL_NAMES : FFF_TOOL_NAMES;
-}
 
 // ── Cursor store — bounded Map for pagination cursors ──────────────────
 
@@ -321,14 +299,6 @@ export default function fffExtension(pi: ExtensionAPI) {
   let finderPromise: Promise<FileFinder> | null = null;
   let activeCwd = process.cwd();
 
-  // Mode resolution: flag > env > default
-  let currentMode: FffMode =
-    (pi.getFlag("fff-mode") as FffMode) ??
-    (process.env.PI_FFF_MODE as FffMode) ??
-    "tools-and-ui";
-
-  const toolNames = resolveToolNames(currentMode);
-
   const frecencyDbPath =
     (pi.getFlag("fff-frecency-db") as string | undefined) ??
     process.env.FFF_FRECENCY_DB ??
@@ -349,18 +319,6 @@ export default function fffExtension(pi: ExtensionAPI) {
     "fff-enable-root-scan",
     "FFF_ENABLE_ROOT_SCAN",
   );
-
-  function getMode(): FffMode {
-    return currentMode;
-  }
-
-  function setMode(mode: FffMode): void {
-    currentMode = mode;
-  }
-
-  function shouldEnableMentions(): boolean {
-    return currentMode !== "tools-only";
-  }
 
   async function ensureFinder(cwd: string): Promise<FileFinder> {
     if (finder && !finder.isDestroyed && finderCwd === cwd)
@@ -444,8 +402,7 @@ export default function fffExtension(pi: ExtensionAPI) {
 
       return {
         async getSuggestions(lines, cursorLine, cursorCol, options) {
-          if (shouldEnableMentions()) {
-            try {
+          try {
               const mentionResult = await mentionProvider.getSuggestions(
                 lines,
                 cursorLine,
@@ -456,7 +413,6 @@ export default function fffExtension(pi: ExtensionAPI) {
             } catch {
               // Delegate when FFF lookup is unavailable.
             }
-          }
           return current.getSuggestions(lines, cursorLine, cursorCol, options);
         },
         applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
@@ -472,11 +428,6 @@ export default function fffExtension(pi: ExtensionAPI) {
   }
 
   // ── Flags ────────────────────────────────────────────────────────────
-
-  pi.registerFlag("fff-mode", {
-    description: "FFF mode: tools-and-ui | tools-only | override",
-    type: "string",
-  });
 
   pi.registerFlag("fff-frecency-db", {
     description: "Path to the frecency database (overrides FFF_FRECENCY_DB env)",
@@ -499,27 +450,6 @@ export default function fffExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     try {
       activeCwd = ctx.cwd;
-
-      // Restore persisted mode from session entries
-      const entries = ctx.sessionManager?.getEntries();
-      if (entries) {
-        const modeEntry = [...entries]
-          .reverse()
-          .find(
-            (e: { type: string; customType?: string }) =>
-              e.type === "custom" && e.customType === "fff-mode",
-          );
-        if (
-          modeEntry &&
-          typeof (modeEntry as any).data?.mode === "string" &&
-          VALID_MODES.includes((modeEntry as any).data.mode as FffMode)
-        ) {
-          const restored = (modeEntry as any).data.mode as FffMode;
-          if (restored !== currentMode) {
-            currentMode = restored;
-          }
-        }
-      }
 
       registerAutocompleteProvider(ctx);
       await ensureFinder(activeCwd);
@@ -599,8 +529,8 @@ export default function fffExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: toolNames.grep,
-    label: toolNames.grep,
+    name: "ffgrep",
+    label: "ffgrep",
     description: `Grep file contents. Smart-case, auto-detects regex vs literal, git-aware. Results are ranked by frecency (most-accessed files first); matches within a file stay in source order. Default limit ${DEFAULT_GREP_LIMIT}.`,
     promptSnippet: "Grep contents",
     promptGuidelines: [
@@ -705,7 +635,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       const pattern = args?.pattern ?? "";
       const pathArg = args?.path ?? ".";
       let content =
-        theme.fg("toolTitle", theme.bold(toolNames.grep)) +
+        theme.fg("toolTitle", theme.bold("ffgrep")) +
         " " +
         theme.fg("accent", `/${pattern}/`) +
         theme.fg("toolOutput", ` in ${pathArg}`);
@@ -748,8 +678,8 @@ export default function fffExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
-    name: toolNames.find,
-    label: toolNames.find,
+    name: "fffind",
+    label: "fffind",
     description: `Fuzzy path search and glob search. Matches against the whole repo-relative path, not just the filename. Frecency-ranked, git-aware. Multi-word = narrower (AND). Default limit ${DEFAULT_FIND_LIMIT}.`,
     promptSnippet: "Find files by path or glob",
     promptGuidelines: [
@@ -821,7 +751,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       const pattern = args?.pattern ?? "";
       const pathArg = args?.path ?? ".";
       let content =
-        theme.fg("toolTitle", theme.bold(toolNames.find)) +
+        theme.fg("toolTitle", theme.bold("fffind")) +
         " " +
         theme.fg("accent", pattern) +
         theme.fg("toolOutput", ` in ${pathArg}`);
@@ -854,8 +784,8 @@ export default function fffExtension(pi: ExtensionAPI) {
     });
 
     pi.registerTool({
-      name: toolNames.multiGrep,
-      label: toolNames.multiGrep,
+      name: "fff-multi-grep",
+      label: "fff-multi-grep",
       description:
         "Search file contents for ANY of multiple literal patterns (OR, SIMD Aho-Corasick). Faster than regex alternation.",
       promptSnippet: "Multi-pattern OR content search",
@@ -907,7 +837,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         const patterns = args?.patterns ?? [];
         const constraints = args?.constraints;
         let content =
-          theme.fg("toolTitle", theme.bold(toolNames.multiGrep)) +
+          theme.fg("toolTitle", theme.bold("fff-multi-grep")) +
           " " +
           theme.fg("accent", patterns.map((p: string) => `"${p}"`).join(", "));
         if (constraints) content += theme.fg("toolOutput", ` (${constraints})`);
@@ -924,33 +854,7 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   // ── Commands ─────────────────────────────────────────────────────────
 
-  pi.registerCommand("fff-mode", {
-    description: "Show or set FFF mode: /fff-mode [tools-and-ui | tools-only | override]",
-    handler: async (args, ctx) => {
-      const arg = (args || "").trim();
-      if (!arg) {
-        const mode = getMode();
-        const flag = pi.getFlag("fff-mode") ?? "unset";
-        ctx.ui.notify(`Current mode: '${mode}' (flag: ${flag})`, "info");
-        return;
-      }
-      if (!VALID_MODES.includes(arg as FffMode)) {
-        ctx.ui.notify(`Usage: /fff-mode [${VALID_MODES.join(" | ")}]`, "warning");
-        return;
-      }
 
-      const newMode = arg as FffMode;
-      const oldMode = getMode();
-      setMode(newMode);
-      pi.appendEntry("fff-mode", { mode: newMode });
-
-      const note =
-        (oldMode === "override") !== (newMode === "override")
-          ? " (tool name change requires /reload)"
-          : "";
-      ctx.ui.notify(`Mode changed: '${oldMode}' \u2192 '${newMode}'${note}`, "info");
-    },
-  });
 
   pi.registerCommand("fff-health", {
     description: "Show FFF file finder health and status",
@@ -969,7 +873,6 @@ export default function fffExtension(pi: ExtensionAPI) {
       const h = health.value;
       const lines = [
         `FFF v${h.version}`,
-        `Mode: ${getMode()}`,
         `Git: ${h.git.repositoryFound ? `yes (${h.git.workdir ?? "unknown"})` : "no"}`,
         `Picker: ${h.filePicker.initialized ? `${h.filePicker.indexedFiles ?? 0} files` : "not initialized"}`,
         `Frecency: ${h.frecency.initialized ? "active" : "disabled"}`,
