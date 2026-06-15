@@ -5,14 +5,30 @@
  * this extension) and registers them with the pi-subagents extension via
  * the globalThis.__pi_subagents bridge.
  *
- * Enforcement:
- * - Blocks high-context tools (grep, find, web_search) and bash commands
- *   containing grep-like searches in the main agent process.
- * - Action tools (write, edit, bash) and orientation tools (read, ls) are
- *   allowed directly — they have low context cost.
- * - Child subagent processes (PI_IS_SUBAGENT=1) have full tool access.
- * - Injects auto-generated delegation rules at the TOP of the system prompt
- *   telling the LLM which agent to use for which task.
+ * Enforcement (multi-layered to prevent subagent bypass):
+ *
+ * 1. System prompt injection (before_agent_start)
+ *    - Auto-generated delegation table: "You MUST dispatch subagents for..."
+ *    - Anti-patterns table: concrete bypass examples with correct alternatives
+ *    - Routing patterns table: user intent → dispatch agent mapping
+ *    - Tool restrictions: what's allowed vs blocked and why
+ *
+ * 2. Input pre-processor (input event)
+ *    - Classifies user messages using conservative keyword matching
+ *    - Injects routing directive prefix when a clear agent match is found
+ *
+ * 3. Tool-level enforcement (tool_call event)
+ *    - BLOCKED: grep, find, web_search, ffgrep, fffind, fff-multi-grep
+ *    - BLOCKED bash: grep, rg, ag, ack, find, sed, awk, git grep
+ *    - BLOCKED bash: node -e/--eval, bun -e, npx tsx -e, deno eval,
+ *                    python -c, python3 -c, ruby -e, php -r (inline exec)
+ *    - BLOCKED: 4th+ read in a single turn (forces scout dispatch, threshold=3)
+ *
+ * 4. Turn boundary tracking (turn_start event)
+ *    - Resets read counter per turn
+ *
+ * Child subagent processes (PI_IS_SUBAGENT=1) have full tool access.
+ * Restrictions apply only to the main agent process.
  *
  * Agent file format (frontmatter + markdown body):
  *   ---
@@ -34,10 +50,103 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
+// ── Precompiled constants (avoid per-event allocations) ──────────────
+
+/** Bash commands blocked as base command when running code searches */
+const BLOCKED_BASH_SEARCH = /^(grep|rg|ag|ack|find|sed|awk)$/;
+
+/** Shared eval-flag pattern used by node, bun, and npx tsx */
+const EVAL_FLAG_RE = /^(?:-[eE]|--eval)$/;
+
+/** Native tools blocked in the main agent */
+const BLOCKED_TOOLS = new Set(["grep", "find", "web_search", "ffgrep", "fffind", "fff-multi-grep"]);
+
+/** Inline eval engine flags — map of base command → flag regex */
+const INLINE_EVAL_FLAGS: Record<string, RegExp> = {
+	node: EVAL_FLAG_RE,
+	bun: EVAL_FLAG_RE,
+	deno: /^eval$/,
+	python: /^-c$/,
+	python3: /^-c$/,
+	ruby: /^-e$/,
+	perl: /^-e$/,
+	php: /^-r$/,
+};
+
+/** Routing rules for the input pre-processor */
+const ROUTING_RULES: Array<{ keywords: string[]; agent: string; description: string }> = [
+	{
+		keywords: [
+			"review the code", "review this", "code review", "review the changes",
+			"review changes", "code audit", "validate the", "check for bugs",
+			"security review", "performance impact", "code quality",
+		],
+		agent: "reviewer",
+		description: "Code and plan review specialist for quality, security, and correctness",
+	},
+	{
+		keywords: [
+			"create a plan", "plan the implementation", "plan this",
+			"plan how to", "plan an", "implementation plan",
+		],
+		agent: "planner",
+		description: "Creates implementation plans by scouting code and researching requirements",
+	},
+	{
+		keywords: [
+			"search the web", "look up how", "find documentation for",
+			"find docs for", "research how", "best practices for",
+			"what is the latest", "how does it compare",
+		],
+		agent: "researcher",
+		description: "Web researcher \u2014 searches the web and synthesizes findings",
+	},
+];
+
 const AGENTS_DIR = path.join(
 	path.dirname(new URL(import.meta.url).pathname),
 	"agents",
 );
+
+function buildRoutingMessage(agentName: string, originalMessage: string): string {
+	const agentMessages: Record<string, { pattern: string; workflow: string }> = {
+		reviewer: {
+			pattern: "CODE REVIEW",
+			workflow:
+				"Dispatch agent:reviewer FIRST. The reviewer subagent runs in an isolated " +
+				"process, reads all relevant files, and returns a compressed, structured review " +
+				"covering quality, security, and correctness. Only use direct read after the " +
+				"subagent has identified specific files to examine.",
+		},
+		planner: {
+			pattern: "IMPLEMENTATION PLANNING",
+			workflow:
+				"Dispatch agent:planner FIRST. The planner subagent scouts the codebase, " +
+				"researches requirements, and produces a structured step-by-step plan. " +
+				"Direct exploration burns context that the planner would use more efficiently.",
+		},
+		researcher: {
+			pattern: "WEB RESEARCH",
+			workflow:
+				"Dispatch agent:researcher FIRST. The researcher subagent runs multiple " +
+				"searches in parallel, fetches pages, and synthesizes a concise summary. " +
+				"Direct web_search or web_fetch calls produce raw results that bloat your context.",
+		},
+	};
+
+	const info = agentMessages[agentName] || { pattern: "TASK", workflow: `Dispatch agent:${agentName} first.` };
+
+	return (
+		`⚠️ ROUTING REQUIREMENT: This task matches ${info.pattern} patterns (agent:${agentName}).\n\n` +
+		`Direct read/bash exploration is NOT ALLOWED for this task type because:\n` +
+		`  • Context bloat — raw file contents consume 10-20x more tokens than subagent summaries\n` +
+		`  • Task failure risk — context overflow causes truncated responses\n` +
+		`  • Quality loss — agent:${agentName} is a specialist with targeted system prompts\n\n` +
+		`CORRECT WORKFLOW: ${info.workflow}\n\n` +
+		`--- original user message below ---\n\n` +
+		originalMessage
+	);
+}
 
 // ── Agent Loading ────────────────────────────────────────────────────
 
@@ -53,6 +162,7 @@ interface AgentMeta {
 }
 
 let cachedAgents: AgentMeta[] | null = null;
+let cachedDelegationRules: string | null = null;
 let agentsRegistered = false;
 
 /**
@@ -162,6 +272,43 @@ function generateDelegationRules(allAgents: AgentMeta[]): string {
 	);
 	lines.push("");
 
+	// ════════════════════════════════════════════════════════════════════
+	// ANTI-PATTERNS TABLE
+	// ════════════════════════════════════════════════════════════════════
+	lines.push("## Anti-patterns \u2014 DO NOT bypass subagents");
+	lines.push("");
+	lines.push("These are common bypass patterns that waste context and are NOT ALLOWED:");
+	lines.push("");
+	lines.push("| \u274c Anti-pattern (what you might be tempted to do) | \u2705 Correct approach |");
+	lines.push("|---|---|");
+	lines.push("| `read` on 3+ files to understand code | Dispatch `agent: scout` for compressed summaries |");
+	lines.push("| `bash node -e \"...\"` to explore or compute something inline | Dispatch `agent: scout` or `agent: worker` |");
+	lines.push("| `bash npx tsx -e \"...\"` to run inline TypeScript | Dispatch `agent: scout` or `agent: worker` |");
+	lines.push("| `bash python3 -c \"...\"` to explore code properties | Dispatch `agent: scout` (it runs in isolation) |");
+	lines.push("| `bash cat` + pipe to analyze source files | Dispatch `agent: scout` for structured output |");
+	lines.push("| Reading 5+ files in a single turn to 'just understand' | Dispatch `agent: scout` first for orientation |");
+	lines.push("| Trying to review code without dispatching `agent: reviewer` | Always dispatch reviewer for review tasks |");
+	lines.push("| Jumping straight to implementation without `agent: planner` | Dispatch planner first for non-trivial changes |");
+	lines.push("");
+	lines.push("**Consequence of bypassing:** every subagent you skip dumps raw data into your finite context window.");
+	lines.push("Subagents run in isolated processes and return only compressed summaries. Direct tool abuse leads");
+	lines.push("to context overflow, truncated responses, and missed work.");
+	lines.push("");
+
+	// ════════════════════════════════════════════════════════════════════
+	// ROUTING PATTERNS TABLE
+	// ════════════════════════════════════════════════════════════════════
+	lines.push("## Routing Patterns \u2014 explicit dispatch rules");
+	lines.push("");
+	lines.push("| When the user says... | Dispatch this agent FIRST |");
+	lines.push("|---|---|");
+	lines.push("| \"review this code\" / \"check for issues\" / \"performance impact\" / \"code audit\" / \"validate\" | `agent: reviewer` |");
+	lines.push("| \"plan implementation\" / \"how to implement\" / \"what needs to change\" | `agent: planner` |");
+	lines.push("| \"find where X is defined\" / \"explore codebase\" / \"map architecture\" / \"trace\" | `agent: scout` |");
+	lines.push("| \"research Y\" / \"search the web for Z\" / \"find docs\" / \"look up\" | `agent: researcher` |");
+	lines.push("| \"implement X\" / \"change Y\" / \"add feature\" / \"refactor\" / \"fix bug\" | `agent: worker` (after planner if complex) |");
+	lines.push("");
+
 	// ════════════════════════════════════════════════
 	// DETAILED AGENT REFERENCE (auto-generated)
 	// ════════════════════════════════════════════════
@@ -227,44 +374,106 @@ function generateDelegationRules(allAgents: AgentMeta[]): string {
 /**
  * Build the tool restrictions block.
  *
- * Only high-context tools are blocked. Action tools (write, edit, bash) and
- * orientation tools (read, ls) are allowed — they have low context cost.
+ * Allowed tools are only for targeted, bounded operations. High-context tools
+ * are blocked. bash with grep-like commands or inline code execution is blocked
+ * (the LLM could use these to bypass subagent dispatch).
+ *
+ * Child subagent processes have full tool access.
  */
 const TOOL_RESTRICTIONS = [
 	"## Tool Restrictions",
 	"",
-	"To protect your context window, tools that produce high-volume output are blocked.",
-	"Use the `subagent` tool to delegate exploration and research tasks.",
+	"Your direct tools are for **targeted, bounded operations only** — not for exploration, research, or review.",
+	"Use the `subagent` tool to delegate work that would produce high-volume output or consume significant context.",
 	"",
-	"| Tool | Status | Reason |",
-	"|---|---|---|",
-	"| `subagent` | ✅ Allowed | Primary mechanism for delegating work |",
-	"| `read` | ✅ Allowed | Targeted file reads |",
-	"| `ls` | ✅ Allowed | Directory orientation |",
-	"| `write` | ✅ Allowed | Writing files |",
-	"| `edit` | ✅ Allowed | Editing files |",
-	"| `bash` | ✅ Allowed | Running commands (except grep-like searches) |",
-	"| `grep` | ❌ Blocked | High context cost — delegate to `scout` agent |",
-	"| `find` | ❌ Blocked | High context cost — delegate to `scout` agent |",
-	"| `web_search` | ❌ Blocked | High context cost — delegate to `researcher` agent |",
-	"| `web_fetch` | ✅ Allowed | Direct URL fetches |",
-	"| `ffgrep` | ❌ Blocked | High-performance alternative to grep — delegate to `scout` agent |",
-	"| `fffind` | ❌ Blocked | High-performance alternative to find — delegate to `scout` agent |",
-	"| `fff-multi-grep` | ❌ Blocked | Multi-pattern OR search — delegate to `scout` agent |",
+	"### Allowed tools (direct use)",
+	"",
+	"| Tool | When to use directly |",
+	"|---|---|",
+	"| `subagent` | **Always first** for exploration, research, review, or multi-file work |",
+	"| `read` | Only after scout has identified the file; or 1-2 quick lookups at known paths |",
+	"| `ls` | Quick orientation of a known directory |",
+	"| `write` | Finalizing changes |",
+	"| `edit` | Targeted edits to known locations |",
+	"| `bash` | Simple commands at known paths; NOT for exploration scripts or inline eval |",
+	"| `web_fetch` | Only when you have the exact URL |",
+	"",
+	"### Blocked tools (delegate to subagent)",
+	"",
+	"| Tool | Delegate to |",
+	"|---|---|",
+	"| `grep` | `agent: scout` |",
+	"| `find` | `agent: scout` |",
+	"| `ffgrep` | `agent: scout` |",
+	"| `fffind` | `agent: scout` |",
+	"| `fff-multi-grep` | `agent: scout` |",
+	"| `web_search` | `agent: researcher` |",
+	"",
+	"### Blocked bash patterns",
+	"",
+	"The following bash commands are blocked to prevent subagent bypass:",
+	"- `grep`, `rg`, `ag`, `ack`, `find`, `sed`, `awk` as base commands (code search)",
+	"- `git grep` (code search via git)",
+	"- `node -e`/`--eval`, `bun -e`/`--eval` (inline JS execution — replaces scout)",
+	"- `npx tsx -e` (inline TypeScript execution — replaces scout)",
+	"- `deno eval` (inline code execution)",
+	"- `python -c`, `python3 -c`, `ruby -e`, `perl -e`, `php -r` (inline scripting)",
 	"",
 	"When blocked, the tool returns a reason with available agents and an example.",
 	"Subagent child processes have full tool access — restrictions apply only to this main agent.",
 	"",
 ].join("\n");
 
+// ── Per-turn read counter ────────────────────────────────────────────
+// Scoped inside export default to avoid shared mutable state if the module
+// were ever loaded multiple times (e.g., in tests).
+
 // ── Extension ────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+	// Per-turn read counter — closure-scoped, not module-level.
+	let readCountThisTurn = 0;
+	let currentTurnIndex = -1;
+	const MAX_READS_PER_TURN = 3;
+
 	// Register agents with the pi-subagents runtime
 	pi.on("session_start", async () => {
-		// Invalidate agent cache so reloads pick up new agent files
+		// Invalidate caches so reloads pick up new agent files
 		cachedAgents = null;
+		cachedDelegationRules = null;
 		agentsRegistered = false;
+		readCountThisTurn = 0;
+		currentTurnIndex = -1;
+	});
+
+	// Input pre-processor: inject routing directives when user task matches an agent
+	pi.on("input", (event) => {
+		// Only route for interactive user input, not for extension-sent messages
+		if (process.env.PI_IS_SUBAGENT === "1") return;
+		if (event.source !== "interactive") return;
+
+		const text = event.text.toLowerCase();
+
+		// Conservative multi-word matching — only trigger on clear intent signals
+		for (const rule of ROUTING_RULES) {
+			if (rule.keywords.some((kw) => text.includes(kw))) {
+				return {
+					action: "transform" as const,
+					text: buildRoutingMessage(rule.agent, event.text),
+				};
+			}
+		}
+
+		return { action: "continue" as const };
+	});
+
+	// Track turn boundaries for read counter reset
+	pi.on("turn_start", (event) => {
+		if (process.env.PI_IS_SUBAGENT === "1") return;
+		if (event.turnIndex !== currentTurnIndex) {
+			readCountThisTurn = 0;
+			currentTurnIndex = event.turnIndex;
+		}
 	});
 
 	pi.on("before_agent_start", async (event) => {
@@ -314,12 +523,14 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// Build delegation rules (auto-generated, at TOP of system prompt)
-		const allAgents = loadAllAgents();
-		const rules = generateDelegationRules(allAgents);
+		if (!cachedDelegationRules) {
+			const allAgents = loadAllAgents();
+			cachedDelegationRules = generateDelegationRules(allAgents);
+		}
 
 		// Prepend rules + restrictions BEFORE the existing system prompt
 		return {
-			systemPrompt: rules + "\n\n" + TOOL_RESTRICTIONS + "\n\n" + event.systemPrompt,
+			systemPrompt: cachedDelegationRules + "\n\n" + TOOL_RESTRICTIONS + "\n\n" + event.systemPrompt,
 		};
 	});
 
@@ -341,10 +552,9 @@ export default function (pi: ExtensionAPI) {
 		if (isChildProcess) return;
 
 		if (agentsRegistered) {
-			const blocked = new Set(["grep", "find", "web_search", "ffgrep", "fffind", "fff-multi-grep"]);
 
 			// Block native grep, find, web_search
-			if (blocked.has(event.toolName)) {
+			if (BLOCKED_TOOLS.has(event.toolName)) {
 				const currentAgents = loadAllAgents();
 				const agentList = currentAgents.length > 0
 					? currentAgents.map((a) => `${a.name} (${a.description})`).join("\n  - ")
@@ -365,9 +575,11 @@ export default function (pi: ExtensionAPI) {
 				const cmd = (event.input as any).command || "";
 				// Extract the first command (skip env vars, pipes).
 				// This avoids false positives from words like "grep" in commit messages.
+				// Handles quoted values with escaped quotes (FOO="hello\"world").
 				const firstCmd = cmd
 					.trim()
-					.replace(/^([A-Z_]+=\S+\s+)*/, "")
+					.replace(/^\s*env\s+/, "")
+					.replace(/^([A-Za-z0-9_]+=(?:"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'|\S+)\s+)*/, "")
 					.split("|")[0]
 					.trim()
 					.split(/\s+/);
@@ -375,7 +587,7 @@ export default function (pi: ExtensionAPI) {
 				const sub = firstCmd[1] || "";
 				// Block: grep, rg, find, ag, ack as base commands
 				// Block: git grep specifically (not other git subcommands)
-				if (/^(grep|rg|ag|ack|find|sed|awk)$/.test(base)) {
+				if (BLOCKED_BASH_SEARCH.test(base)) {
 					return {
 						block: true,
 						reason:
@@ -393,6 +605,73 @@ export default function (pi: ExtensionAPI) {
 							"for code exploration — it runs in an isolated process and returns compressed summaries.",
 					};
 				}
+
+				// Block inline code execution engines (subagent bypass pattern)
+				// Scan all args (not just sub) because flags can appear at any position:
+				//   node --experimental-vm-modules -e "code", bun --inspect -e "code"
+				//   deno --allow-all eval "code"
+				// For npx: npx tsx -e or npx --yes tsx --eval (handled separately)
+
+				const evalFlagPattern = INLINE_EVAL_FLAGS[base];
+				if (evalFlagPattern) {
+					const hasEval = firstCmd.slice(1).some(
+						(t) => evalFlagPattern.test(t));
+					if (hasEval) {
+						return {
+							block: true,
+							reason:
+								"__PI_BLOCKED__" +
+								`Inline code execution via \`${base}\` is blocked to protect your context window. ` +
+								"Direct inline scripts produce unbounded output that bloats your context.\n\n" +
+								"Use `subagent` to delegate this task:\n" +
+								"  - Code exploration \u2192 `agent: scout`\n" +
+								"  - Code changes \u2192 `agent: worker`\n" +
+								"  - Web research \u2192 `agent: researcher`",
+						};
+					}
+				}
+
+				// Special case: npx tsx -e (flags can be reordered, scan all args)
+				if (base === "npx") {
+					const tsxIdx = firstCmd.findIndex((t) => t === "tsx");
+					if (tsxIdx >= 0) {
+						const hasEvalFlag = firstCmd.slice(tsxIdx + 1).some((t) =>
+							EVAL_FLAG_RE.test(t));
+						if (hasEvalFlag) {
+							return {
+								block: true,
+								reason:
+									"__PI_BLOCKED__" +
+									"Inline TypeScript execution via `npx tsx -e` is blocked to protect your context window. " +
+									"Direct inline scripts produce unbounded output that bloats your context.\n\n" +
+									"Use `subagent` to delegate this task:\n" +
+									"  - Code exploration \u2192 `agent: scout`\n" +
+									"  - Code changes \u2192 `agent: worker`\n" +
+									"  - Web research \u2192 `agent: researcher`",
+							};
+						}
+					}
+				}
+			}
+
+			// Track read count per turn to prevent multi-file exploration without scout
+			if (event.toolName === "read") {
+				if (readCountThisTurn >= MAX_READS_PER_TURN) {
+					const currentAgents = loadAllAgents();
+					return {
+						block: true,
+						reason:
+							"__PI_BLOCKED__" +
+							`⚠️ READ LIMIT: ${readCountThisTurn}/${MAX_READS_PER_TURN} reads used this turn.\n\n` +
+							"Continuing to read files directly risks context overflow:\n" +
+							"  • Each raw file read consumes tokens that compound across turns\n" +
+							"  • Context overflow causes truncated responses and missed work\n\n" +
+							"Dispatch `agent: scout` for codebase exploration — it runs in an isolated " +
+							"process, reads all relevant files, and returns compressed summaries.\n\n" +
+							`Available agents: ${currentAgents.map((a) => a.name).join(", ")}`,
+					};
+				}
+				readCountThisTurn++;
 			}
 		}
 	});
