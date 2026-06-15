@@ -5,13 +5,11 @@
  * backed by FFF's Rust engine — frecency-ranked, git-aware, typo-resistant
  * search that outperforms ripgrep/fzf on repeated-search workloads.
  *
- * Three operating modes (switchable at runtime with `/fff-mode`):
- *   - tools-and-ui (default): Adds ffgrep, fffind tools + @-mention autocomplete
- *   - tools-only: Only tool injection (keeps pi's native editor autocomplete)
- *   - override: Replaces pi's built-in grep/find tools with FFF implementations
+ * Tools: ffgrep, fffind, fff-multi-grep
+ * @-mention autocomplete is always enabled.
  *
- * Env vars: PI_FFF_MODE, FFF_FRECENCY_DB, FFF_HISTORY_DB
- * Flags: --fff-mode, --fff-frecency-db, --fff-history-db, --fff-enable-root-scan
+ * Env vars: FFF_FRECENCY_DB, FFF_HISTORY_DB, FFF_ENABLE_ROOT_SCAN
+ * Flags: --fff-frecency-db, --fff-history-db, --fff-enable-root-scan
  *
  * Dependencies:
  *   - @ff-labs/fff-node: Native FFF Node.js SDK (wraps Rust cdylib)
