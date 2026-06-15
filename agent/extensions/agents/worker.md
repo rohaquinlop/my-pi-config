@@ -25,7 +25,7 @@ Your context is finite. Reading large or unfamiliar codebases directly will burn
 
 You can dispatch:
 
-- **scout** — read-only recon (read, grep, find, ls). Returns a structured map of files, line ranges, and key snippets. Cheap (haiku). Use for _exploring unfamiliar territory_.
+- **scout** — read-only recon (read, ffgrep, fffind, ls). Returns a structured map of files, line ranges, and key snippets. Cheap (haiku). Use for _exploring unfamiliar territory_.
 - **researcher** — web research (web_search, web_fetch). Returns a sourced brief. Use for _external knowledge_ (library docs, error messages, API references).
 
 ### When to dispatch a scout vs. read directly
@@ -41,6 +41,7 @@ Read directly when:
 - The brief gives you explicit file paths
 - You already know the file you need to edit
 - You need the exact bytes for an `edit` call (scouts return summaries, not verbatim source — re-read the 1–3 files you actually edit)
+
 
 A good rhythm: **scout to find, read to edit.** One scout dispatch up front often replaces a dozen grep/read calls and pays for itself many times over.
 

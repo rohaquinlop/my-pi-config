@@ -248,6 +248,9 @@ const TOOL_RESTRICTIONS = [
 	"| `find` | ❌ Blocked | High context cost — delegate to `scout` agent |",
 	"| `web_search` | ❌ Blocked | High context cost — delegate to `researcher` agent |",
 	"| `web_fetch` | ✅ Allowed | Direct URL fetches |",
+	"| `ffgrep` | ❌ Blocked | High-performance alternative to grep — delegate to `scout` agent |",
+	"| `fffind` | ❌ Blocked | High-performance alternative to find — delegate to `scout` agent |",
+	"| `fff-multi-grep` | ❌ Blocked | Multi-pattern OR search — delegate to `scout` agent |",
 	"",
 	"When blocked, the tool returns a reason with available agents and an example.",
 	"Subagent child processes have full tool access — restrictions apply only to this main agent.",
@@ -338,7 +341,7 @@ export default function (pi: ExtensionAPI) {
 		if (isChildProcess) return;
 
 		if (agentsRegistered) {
-			const blocked = new Set(["grep", "find", "web_search"]);
+			const blocked = new Set(["grep", "find", "web_search", "ffgrep", "fffind", "fff-multi-grep"]);
 
 			// Block native grep, find, web_search
 			if (blocked.has(event.toolName)) {
