@@ -15,6 +15,26 @@ Prefer `uv` whenever working with Python, if available. This applies only to Pyt
 
 For detailed uv usage, read [`UV.md`](./UV.md) in this directory.
 
+# GitHub CLI
+
+`gh` (GitHub CLI) is available and authenticated for GitHub operations. The
+worker subagent (the only agent with `safe_bash`) executes `gh` commands.
+
+Common subcommands used in this project:
+- `gh pr create` — create pull requests (see `create-pr` skill)
+- `gh pr list` — list pull requests with `--json` for machine-readable output
+- `gh pr view` — view/update pull requests
+- `gh pr edit` — update PR title, body, or metadata
+- `gh issue` — issue management
+- `gh repo` — repository operations
+- `gh api` — direct GitHub API access (useful for operations not covered by other subcommands)
+
+When dispatching tasks involving GitHub operations, route to the worker
+subagent and include `gh` CLI context in the task description.
+
+For details, see the `create-pr` and `pr-description` skills.
+
+
 # Project State
 
 ## Directory Structure
@@ -48,9 +68,11 @@ For detailed uv usage, read [`UV.md`](./UV.md) in this directory.
     │       └── index.ts                      # read_pdf
     │
     ├── skills/                               # Loaded on demand by intent
+    │   ├── create-pr/           SKILL.md     # GitHub PR creation via gh CLI
     │   ├── git-commit/          SKILL.md     # Conventional Commits workflow
+    │   ├── handoff/             SKILL.md     # Conversation compact & handoff
     │   ├── plan-clarifier/      SKILL.md     # Plan clarification with multiple-choice UI
-    │   └── pr-description/      SKILL.md     # PR description generation
+    │   ├── pr-description/      SKILL.md     # PR description generation from git diff
     │
     └── git/                                  # Git-backed pi packages
         └── github.com/rohaquinlop/pi-subagents/  # Subagent runtime
@@ -92,7 +114,9 @@ User agents with the same `name` override the corresponding built-in agent. User
 
 ## Skills
 
+- **create-pr** (loaded when user asks to create a PR) — GitHub PR creation via `gh pr create`, uses the pr-description skill
 - **git-commit** (loaded when user asks to stage/commit) — Conventional Commits with structured types/scopes and grouping
+- **handoff** (loaded when user asks to compact/handoff) — Conversation compaction and handoff document
 - **plan-clarifier** (loaded on plan clarification intent) — Multiple-choice TUI, iteration, brief generation
 - **pr-description** (loaded when asked for PR) — Generates PR description from `git diff main...HEAD`
 

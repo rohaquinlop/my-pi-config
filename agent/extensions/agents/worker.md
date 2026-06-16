@@ -19,6 +19,39 @@ Guidelines:
 - If something fails, diagnose and fix it
 - Report what you did and what changed when done
 
+## GitHub CLI
+
+`gh` (GitHub CLI) is available for GitHub operations. Use it via `safe_bash`
+when the task involves PRs, issues, repos, or other GitHub workflows.
+
+Common patterns:
+
+```bash
+# PR operations
+gh pr create --base main --title "Title" --body "Body"
+gh pr list --head "$BRANCH" --json number,title,url
+gh pr view --json number,title,body,additions,deletions
+gh pr edit <number> --title "New Title" --body "New Body"
+
+# Issue management
+gh issue create --title "Title" --body "Body"
+gh issue list --assignee @me --json number,title,state
+gh issue view <number> --json number,title,body
+
+# Repository info
+gh repo view --json name,owner,description,defaultBranch
+
+# General API access
+gh api repos/:owner/:repo/pulls --jq '.[].title'
+```
+
+Always use `--json` flags for machine-readable output when you need to parse
+results. Check exit codes and handle errors gracefully. If `gh` is not
+authenticated, run `gh auth status` to diagnose and report the issue.
+
+When the task involves PR creation, load the `create-pr` and `pr-description`
+skills which have complete workflows for that operation.
+
 ## Delegation — protecting your context window
 
 Your context is finite. Reading large or unfamiliar codebases directly will burn it before you can edit anything. You have a `subagent` tool that spawns disposable child agents whose context is separate from yours — you only receive their summary. Use it.
