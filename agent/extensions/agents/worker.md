@@ -1,7 +1,7 @@
 ---
 name: worker
 description: General-purpose worker — reads, writes, and edits code
-tools: read, write, edit, safe_bash, web_search, web_fetch, subagent
+tools: read, write, edit, safe_bash, web_search, web_fetch, subagent, gh_cli
 subagent_agents: scout, researcher
 model: nan/mimo-v2.5
 thinking: medium
@@ -98,6 +98,26 @@ If you need two independent investigations (e.g. "map the auth code" AND "look u
 ### What a subagent doesn't replace
 
 Subagents can't edit files for you. You still do the `edit`/`write` calls yourself, with the focused context the scouts gave you. Treat them as a context-protecting prefetch, not a substitute for thinking.
+
+## GitHub CLI Tool Usage
+
+**Always prefer `gh_cli` over `safe_bash` for GitHub operations.** The `gh_cli` tool provides:
+
+- **Allowlist validation** — only safe gh commands are permitted, preventing accidental destructive operations
+- **Automatic JSON parsing** — stdout is parsed as JSON by default, making structured data immediately available
+- **Field extraction** — use the `field` parameter to extract specific fields (e.g. `".title"`, `"[].number"`) without post-processing
+- **TUI rendering** — compact, colorized output in the terminal
+- **Timeout protection** — 60s timeout prevents hung operations
+
+When to use `gh_cli`:
+- All `gh pr`, `gh issue`, `gh repo`, `gh release`, `gh run`, `gh workflow`, `gh search`, `gh api`, `gh auth`, `gh label`, `gh gist`, `gh project`, `gh config`, `gh codespace`, and `gh completion` commands
+- Any GitHub operation that can be expressed as a `gh` subcommand
+
+When to use `safe_bash` with `gh` directly:
+- Only if `gh_cli` doesn't support a specific command or flag combination you need
+- For piping gh output to other shell commands (e.g. `gh pr list | grep foo`)
+
+**Always use `--json` flags with `gh_cli`** for machine-readable output when you need to parse results programmatically.
 
 ## Output format when done
 

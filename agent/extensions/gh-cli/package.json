@@ -1,0 +1,10 @@
+{
+  "name": "pi-gh-cli-extension",
+  "version": "1.0.0",
+  "description": "Pi extension tool wrapping the GitHub CLI (gh).",
+  "type": "module",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "dependencies": {}
+}
