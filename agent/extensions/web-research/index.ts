@@ -1,5 +1,4 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { DEFAULT_MAX_BYTES as CORE_MAX_BYTES, DEFAULT_MAX_LINES as CORE_MAX_LINES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +9,6 @@ import TurndownService from "turndown";
 
 const UA = "Mozilla/5.0 (compatible; pi-web-research/2.0; +https://pi.dev)";
 const DEFAULT_MAX_BYTES = 8_000_000;
-const DEFAULT_TEXT_LIMIT = 24_000;
 const DEFAULT_FETCH_LIMIT = 3;
 const MAX_FETCH_LIMIT = 8;
 
@@ -360,26 +358,6 @@ async function fetchToMarkdown(params: any, signal?: AbortSignal, onUpdate?: (u:
 	return result;
 }
 
-async function readPreview(file: string | null, limit: number): Promise<string> {
-	if (!file) return "";
-	const text = await fs.readFile(file, "utf8");
-
-	// Use core truncation: byte-aware, line-respecting, 50KB / 2000 line hard cap.
-	// The user-requested textLimit further reduces output below core defaults.
-	const truncation = truncateHead(text, {
-		maxLines: Math.min(CORE_MAX_LINES, limit > 0 ? Math.ceil(limit / 80) : CORE_MAX_LINES),
-		maxBytes: Math.min(CORE_MAX_BYTES, limit * 4),
-	});
-
-	let result = truncation.content;
-	if (truncation.truncated) {
-		result += `\n\n...[truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines`;
-		result += ` (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}).`;
-		result += ` Read markdownPath for full markdown]`;
-	}
-	return result;
-}
-
 function sourceId(i: number): string { return `S${i + 1}`; }
 
 export default function webResearchExtension(pi: ExtensionAPI) {
@@ -466,11 +444,8 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			return new Text(text, 0, 0);
 		},
 		async execute(_toolCallId, params, signal, onUpdate) {
-			const textLimit = clamp(params.textLimit, DEFAULT_TEXT_LIMIT, 1_000, 100_000);
-			const includeMarkdown = params.includeMarkdown !== false;
 			const result = await fetchToMarkdown(params, signal, onUpdate);
-			const preview = includeMarkdown ? await readPreview(result.markdownPath, textLimit) : "";
-			const text = [JSON.stringify(result, null, 2), preview ? `\nMarkdown preview:\n${preview}` : ""].filter(Boolean).join("\n");
+			const text = `[web_fetch] ${result.url} → HTTP ${result.status}, "${result.title}", ${result.length} chars, markdown: ${result.markdownPath || 'N/A'}`;
 			return { content: [{ type: "text", text }], details: result };
 		},
 	});
@@ -506,7 +481,6 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 		async execute(_toolCallId, params, signal, onUpdate) {
 			const searchLimit = clamp(params.searchLimit, 8, 1, 20);
 			const fetchLimit = clamp(params.fetchLimit, DEFAULT_FETCH_LIMIT, 1, MAX_FETCH_LIMIT);
-			const textLimit = clamp(params.textLimit, DEFAULT_TEXT_LIMIT, 1_000, 100_000);
 			const workdir = await makeWorkdir(params.workdir);
 			onUpdate?.({ content: [{ type: "text", text: `Research search: ${params.query}` }] });
 			const results = await runSearch(params.query, searchLimit, signal, onUpdate);
@@ -548,18 +522,9 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 				"",
 			].join("\n");
 			await fs.writeFile(indexPath, lines, "utf8");
-			const indexTrunc = truncateHead(lines, {
-				maxLines: Math.min(CORE_MAX_LINES, textLimit > 0 ? Math.ceil(textLimit / 80) : CORE_MAX_LINES),
-				maxBytes: Math.min(CORE_MAX_BYTES, textLimit * 4),
-			});
-			let preview = indexTrunc.content;
-			if (indexTrunc.truncated) {
-				preview += `\n\n...[truncated: showing ${indexTrunc.outputLines} of ${indexTrunc.totalLines} lines`;
-				preview += ` (${formatSize(indexTrunc.outputBytes)} of ${formatSize(indexTrunc.totalBytes)}).`;
-				preview += ` Read indexPath for full bundle]`;
-			}
+			const text = `[web_research] "${params.query}" → ${fetched.length} sources fetched, ${results.length} total results. Index: ${indexPath}. Workdir: ${workdir}`;
 			return {
-				content: [{ type: "text", text: `${JSON.stringify({ workdir, indexPath, query: params.query, searched: results.length, fetched: fetched.length }, null, 2)}\n\n${preview}` }],
+				content: [{ type: "text", text }],
 				details: { workdir, indexPath, query: params.query, searched: results.length, fetched: fetched.length },
 			};
 		},
