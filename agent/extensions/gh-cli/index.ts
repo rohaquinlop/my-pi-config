@@ -5,7 +5,7 @@
  * JSON output parsing, and field extraction.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
@@ -278,6 +278,7 @@ function tryParseJson(text: string): { ok: true; data: unknown } | { ok: false }
 
 /**
  * Truncate a string to a maximum number of lines and characters.
+ * Used for TUI rendering display only.
  */
 function truncateOutput(text: string, maxLines = 100, maxChars = 8_000): string {
 	const lines = text.split("\n");
@@ -291,6 +292,22 @@ function truncateOutput(text: string, maxLines = 100, maxChars = 8_000): string 
 		result = result.slice(0, maxChars) + "\n... [truncated]";
 	}
 	return result;
+}
+
+/**
+ * Apply core truncation (byte-aware, line-respecting) for LLM output.
+ * Returns { text, wasTruncated, truncation }.
+ */
+function truncateLlmOutput(text: string): { text: string; wasTruncated: boolean } {
+	const tr = truncateHead(text, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+	if (!tr.truncated) return { text, wasTruncated: false };
+	return {
+		text: tr.content +
+			`\n\n...[truncated: showing ${tr.outputLines} of ${tr.totalLines} lines` +
+			` (${formatSize(tr.outputBytes)} of ${formatSize(tr.totalBytes)}).` +
+			` Use --json with field extraction or limit to reduce output]`,
+		wasTruncated: true,
+	};
 }
 
 /**
@@ -426,7 +443,7 @@ export default function ghCliExtension(pi: ExtensionAPI) {
 				}
 
 				return {
-					content: [{ type: "text", text: outputText || "(empty output)" }],
+					content: [{ type: "text", text: truncateLlmOutput(outputText || "(empty output)").text }],
 					details: {
 						command: displayCommand(args, params.repo),
 						exitCode: result.code,

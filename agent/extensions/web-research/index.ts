@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_BYTES as CORE_MAX_BYTES, DEFAULT_MAX_LINES as CORE_MAX_LINES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -362,7 +363,21 @@ async function fetchToMarkdown(params: any, signal?: AbortSignal, onUpdate?: (u:
 async function readPreview(file: string | null, limit: number): Promise<string> {
 	if (!file) return "";
 	const text = await fs.readFile(file, "utf8");
-	return `${text.slice(0, limit)}${text.length > limit ? "\n...[truncated in tool result; read markdownPath for full markdown]" : ""}`;
+
+	// Use core truncation: byte-aware, line-respecting, 50KB / 2000 line hard cap.
+	// The user-requested textLimit further reduces output below core defaults.
+	const truncation = truncateHead(text, {
+		maxLines: Math.min(CORE_MAX_LINES, limit > 0 ? Math.ceil(limit / 80) : CORE_MAX_LINES),
+		maxBytes: Math.min(CORE_MAX_BYTES, limit * 4),
+	});
+
+	let result = truncation.content;
+	if (truncation.truncated) {
+		result += `\n\n...[truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines`;
+		result += ` (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}).`;
+		result += ` Read markdownPath for full markdown]`;
+	}
+	return result;
 }
 
 function sourceId(i: number): string { return `S${i + 1}`; }
@@ -533,7 +548,16 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 				"",
 			].join("\n");
 			await fs.writeFile(indexPath, lines, "utf8");
-			const preview = `${lines.slice(0, textLimit)}${lines.length > textLimit ? "\n...[truncated in tool result; read indexPath for full bundle]" : ""}`;
+			const indexTrunc = truncateHead(lines, {
+				maxLines: Math.min(CORE_MAX_LINES, textLimit > 0 ? Math.ceil(textLimit / 80) : CORE_MAX_LINES),
+				maxBytes: Math.min(CORE_MAX_BYTES, textLimit * 4),
+			});
+			let preview = indexTrunc.content;
+			if (indexTrunc.truncated) {
+				preview += `\n\n...[truncated: showing ${indexTrunc.outputLines} of ${indexTrunc.totalLines} lines`;
+				preview += ` (${formatSize(indexTrunc.outputBytes)} of ${formatSize(indexTrunc.totalBytes)}).`;
+				preview += ` Read indexPath for full bundle]`;
+			}
 			return {
 				content: [{ type: "text", text: `${JSON.stringify({ workdir, indexPath, query: params.query, searched: results.length, fetched: fetched.length }, null, 2)}\n\n${preview}` }],
 				details: { workdir, indexPath, query: params.query, searched: results.length, fetched: fetched.length },

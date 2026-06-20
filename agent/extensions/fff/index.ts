@@ -18,7 +18,7 @@
  * and the tools are available.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type {
   AutocompleteItem,
   AutocompleteProvider,
@@ -622,9 +622,17 @@ export default function fffExtension(pi: ExtensionAPI) {
       if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
       if (fuzzyNotice) output = `[${fuzzyNotice}]\n${output}`;
 
+      const grepTrunc = truncateHead(output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+      let truncatedOutput = grepTrunc.content;
+      if (grepTrunc.truncated) {
+        truncatedOutput += `\n\n...[truncated: showing ${grepTrunc.outputLines} of ${grepTrunc.totalLines} lines`;
+        truncatedOutput += ` (${formatSize(grepTrunc.outputBytes)} of ${formatSize(grepTrunc.totalBytes)}).`;
+        truncatedOutput += ` Use fewer matches or less context to reduce output]`;
+      }
+
       return {
-        content: [{ type: "text", text: output }],
-        details: { totalMatched: result.totalMatched, totalFiles: result.totalFiles },
+        content: [{ type: "text", text: truncatedOutput }],
+        details: { totalMatched: result.totalMatched, totalFiles: result.totalFiles, truncation: grepTrunc.truncated ? grepTrunc : undefined },
       };
     },
 
@@ -824,9 +832,17 @@ export default function fffExtension(pi: ExtensionAPI) {
         }
         if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
 
+        const multiGrepTrunc = truncateHead(output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
+        let truncatedOutput = multiGrepTrunc.content;
+        if (multiGrepTrunc.truncated) {
+          truncatedOutput += `\n\n...[truncated: showing ${multiGrepTrunc.outputLines} of ${multiGrepTrunc.totalLines} lines`;
+          truncatedOutput += ` (${formatSize(multiGrepTrunc.outputBytes)} of ${formatSize(multiGrepTrunc.totalBytes)}).`;
+          truncatedOutput += ` Use fewer matches or less context to reduce output]`;
+        }
+
         return {
-          content: [{ type: "text", text: output }],
-          details: { totalMatched: result.totalMatched, totalFiles: result.totalFiles, patterns: params.patterns },
+          content: [{ type: "text", text: truncatedOutput }],
+          details: { totalMatched: result.totalMatched, totalFiles: result.totalFiles, patterns: params.patterns, truncation: multiGrepTrunc.truncated ? multiGrepTrunc : undefined },
         };
       },
 
