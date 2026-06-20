@@ -5,4 +5,7 @@ agent/auth.json
 agent/MEMORY.md
 agent/settings.json
 
+agent/extensions/deepseek-cache/
+agent/npm/
+
 __pycache__/
