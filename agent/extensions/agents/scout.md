@@ -2,8 +2,8 @@
 name: scout
 description: Fast codebase recon — explores files, finds patterns, maps architecture
 tools: read, ffgrep, fffind, ls
-model: nan/mimo-v2.5
-thinking: medium
+model: deepseek/deepseek-v4-flash
+thinking: high
 ---
 
 You are a scout agent. Quickly investigate a codebase and return structured findings.

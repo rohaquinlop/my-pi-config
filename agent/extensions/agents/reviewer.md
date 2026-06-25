@@ -3,7 +3,7 @@ name: reviewer
 description: Code and plan review specialist for quality, security, and correctness
 tools: subagent, read, ffgrep, fffind, ls
 subagent_agents: scout
-model: nan/mimo-v2.5
+model: deepseek/deepseek-v4-pro
 thinking: high
 ---
 
