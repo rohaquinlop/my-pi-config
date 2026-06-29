@@ -25,10 +25,23 @@ export default function (pi: ExtensionAPI) {
 		if (!content || typeof content !== "object") return false;
 		const text = (content as any).text;
 		return typeof text === "string" && (
+			text.startsWith("__PI_INTERNAL_BLOCKED__") ||
 			text.startsWith("__PI_BLOCKED__") ||
 			text.includes("is blocked to protect your context window") ||
 			text.includes("Broad code searches bloat your context")
 		);
+	}
+
+	/** Strip the internal blocked prefix from content text for clean display. */
+	function stripBlockedPrefix(content: unknown): void {
+		if (!content || typeof content !== "object") return;
+		const c = content as any;
+		if (typeof c.text !== "string") return;
+		if (c.text.startsWith("__PI_INTERNAL_BLOCKED__")) {
+			c.text = c.text.slice("__PI_INTERNAL_BLOCKED__".length);
+		} else if (c.text.startsWith("__PI_BLOCKED__")) {
+			c.text = c.text.slice("__PI_BLOCKED__".length);
+		}
 	}
 
 	// ── Read tool ──
@@ -63,7 +76,7 @@ export default function (pi: ExtensionAPI) {
 			const details = result.details as ReadToolDetails | undefined;
 			const content = result.content[0];
 
-			if (isBlockedResult(content)) return new Text("", 0, 0);
+			if (isBlockedResult(content)) { stripBlockedPrefix(content); return new Text("", 0, 0); }
 			if (content?.type === "image") return new Text(theme.fg("success", "[image loaded]"), 0, 0);
 			if (content?.type !== "text") return new Text(theme.fg("error", "[no content]"), 0, 0);
 
@@ -116,7 +129,7 @@ export default function (pi: ExtensionAPI) {
 			const details = result.details as BashToolDetails | undefined;
 			const content = result.content[0];
 
-			if (isBlockedResult(content)) return new Text("", 0, 0);
+			if (isBlockedResult(content)) { stripBlockedPrefix(content); return new Text("", 0, 0); }
 
 			const output = content?.type === "text" ? content.text : "";
 
@@ -280,7 +293,7 @@ export default function (pi: ExtensionAPI) {
 			const details = result.details as GrepToolDetails | undefined;
 			const content = result.content[0];
 
-			if (isBlockedResult(content)) return new Text("", 0, 0);
+			if (isBlockedResult(content)) { stripBlockedPrefix(content); return new Text("", 0, 0); }
 			if (content?.type !== "text") return new Text(theme.fg("error", "[no results]"), 0, 0);
 
 			const lines = content.text.split("\n").filter((l) => l.trim());
@@ -330,7 +343,7 @@ export default function (pi: ExtensionAPI) {
 			const details = result.details as LsToolDetails | undefined;
 			const content = result.content[0];
 
-			if (isBlockedResult(content)) return new Text("", 0, 0);
+			if (isBlockedResult(content)) { stripBlockedPrefix(content); return new Text("", 0, 0); }
 			if (content?.type !== "text") return new Text(theme.fg("error", "[no entries]"), 0, 0);
 
 			const lines = content.text.split("\n").filter((l) => l.trim());
@@ -381,7 +394,7 @@ export default function (pi: ExtensionAPI) {
 			const details = result.details as FindToolDetails | undefined;
 			const content = result.content[0];
 
-			if (isBlockedResult(content)) return new Text("", 0, 0);
+			if (isBlockedResult(content)) { stripBlockedPrefix(content); return new Text("", 0, 0); }
 			if (content?.type !== "text") return new Text(theme.fg("error", "[no results]"), 0, 0);
 
 			const lines = content.text.split("\n").filter((l) => l.trim());

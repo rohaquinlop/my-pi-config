@@ -465,6 +465,30 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   // ── Shared render helper ─────────────────────────────────────────────
 
+  /** Check if a tool result is a blocked-call message (should not render). */
+  function isBlockedResult(content: unknown): boolean {
+    if (!content || typeof content !== "object") return false;
+    const text = (content as any).text;
+    return typeof text === "string" && (
+      text.startsWith("__PI_INTERNAL_BLOCKED__") ||
+      text.startsWith("__PI_BLOCKED__") ||
+      text.includes("is blocked to protect your context window") ||
+      text.includes("Broad code searches bloat your context")
+    );
+  }
+
+  /** Strip the internal blocked prefix from content text for clean display. */
+  function stripBlockedPrefix(content: unknown): void {
+    if (!content || typeof content !== "object") return;
+    const c = content as any;
+    if (typeof c.text !== "string") return;
+    if (c.text.startsWith("__PI_INTERNAL_BLOCKED__")) {
+      c.text = c.text.slice("__PI_INTERNAL_BLOCKED__".length);
+    } else if (c.text.startsWith("__PI_BLOCKED__")) {
+      c.text = c.text.slice("__PI_BLOCKED__".length);
+    }
+  }
+
   const renderTextResult = (
     result: { content?: { type: string; text?: string }[] },
     options: { expanded?: boolean },
@@ -473,7 +497,13 @@ export default function fffExtension(pi: ExtensionAPI) {
     maxLines = 15,
   ) => {
     const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-    const output = result.content?.find((c) => c.type === "text")?.text?.trim() ?? "";
+    const contentItem = result.content?.find((c) => c.type === "text");
+    if (contentItem && isBlockedResult(contentItem)) {
+      stripBlockedPrefix(contentItem);
+      text.setText("");
+      return text;
+    }
+    const output = contentItem?.text?.trim() ?? "";
     if (!output) {
       text.setText(theme.fg("muted", "No output"));
       return text;

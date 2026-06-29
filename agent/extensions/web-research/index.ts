@@ -385,7 +385,10 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			if (context?.isError && content?.type === "text" && (content.text.includes("is blocked to protect your context window") || content.text.includes("Broad code searches bloat your context"))) {
 				return new Text("", 0, 0);
 			}
-			if (content?.type === "text" && content.text.startsWith("__PI_BLOCKED__")) {
+			if (content?.type === "text" && (content.text.startsWith("__PI_INTERNAL_BLOCKED__") || content.text.startsWith("__PI_BLOCKED__"))) {
+				// Strip internal prefix from stored content for clean display
+				if (content.text.startsWith("__PI_INTERNAL_BLOCKED__")) content.text = content.text.slice("__PI_INTERNAL_BLOCKED__".length);
+				else if (content.text.startsWith("__PI_BLOCKED__")) content.text = content.text.slice("__PI_BLOCKED__".length);
 				return new Text("", 0, 0);
 			}
 			const details = result.details as { results?: Array<{ title: string; source: string }> } | undefined;

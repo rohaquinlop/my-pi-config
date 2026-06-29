@@ -108,46 +108,6 @@ const AGENTS_DIR = path.join(
 	"agents",
 );
 
-function buildRoutingMessage(agentName: string, originalMessage: string): string {
-	const agentMessages: Record<string, { pattern: string; workflow: string }> = {
-		reviewer: {
-			pattern: "CODE REVIEW",
-			workflow:
-				"Dispatch agent:reviewer FIRST. The reviewer subagent runs in an isolated " +
-				"process, reads all relevant files, and returns a compressed, structured review " +
-				"covering quality, security, and correctness. Only use direct read after the " +
-				"subagent has identified specific files to examine.",
-		},
-		planner: {
-			pattern: "IMPLEMENTATION PLANNING",
-			workflow:
-				"Dispatch agent:planner FIRST. The planner subagent scouts the codebase, " +
-				"researches requirements, and produces a structured step-by-step plan. " +
-				"Direct exploration burns context that the planner would use more efficiently.",
-		},
-		researcher: {
-			pattern: "WEB RESEARCH",
-			workflow:
-				"Dispatch agent:researcher FIRST. The researcher subagent runs multiple " +
-				"searches in parallel, fetches pages, and synthesizes a concise summary. " +
-				"Direct web_search or web_fetch calls produce raw results that bloat your context.",
-		},
-	};
-
-	const info = agentMessages[agentName] || { pattern: "TASK", workflow: `Dispatch agent:${agentName} first.` };
-
-	return (
-		`⚠️ ROUTING REQUIREMENT: This task matches ${info.pattern} patterns (agent:${agentName}).\n\n` +
-		`Direct read/bash exploration is NOT ALLOWED for this task type because:\n` +
-		`  • Context bloat — raw file contents consume 10-20x more tokens than subagent summaries\n` +
-		`  • Task failure risk — context overflow causes truncated responses\n` +
-		`  • Quality loss — agent:${agentName} is a specialist with targeted system prompts\n\n` +
-		`CORRECT WORKFLOW: ${info.workflow}\n\n` +
-		`--- original user message below ---\n\n` +
-		originalMessage
-	);
-}
-
 // ── Agent Loading ────────────────────────────────────────────────────
 
 interface AgentMeta {
@@ -164,6 +124,7 @@ interface AgentMeta {
 let cachedAgents: AgentMeta[] | null = null;
 let cachedDelegationRules: string | null = null;
 let agentsRegistered = false;
+let pendingRoutingAgent: string | null = null;
 
 /**
  * Load custom agent .md files from the extensions/agents/ directory.
@@ -192,26 +153,26 @@ function loadCustomAgents(): AgentMeta[] {
 			parseFrontmatter<Record<string, string>>(content);
 		if (!frontmatter.name) continue;
 
-			const tools = (frontmatter.tools || "")
-				.split(",")
-				.map((t) => t.trim())
-				.filter(Boolean);
+		const tools = (frontmatter.tools || "")
+			.split(",")
+			.map((t) => t.trim())
+			.filter(Boolean);
 
-			const rawSubagentAgents = frontmatter.subagent_agents;
-			const subagentAgents = rawSubagentAgents
-				? rawSubagentAgents.split(",").map((t) => t.trim()).filter(Boolean)
-				: undefined;
+		const rawSubagentAgents = frontmatter.subagent_agents;
+		const subagentAgents = rawSubagentAgents
+			? rawSubagentAgents.split(",").map((t) => t.trim()).filter(Boolean)
+			: undefined;
 
-			agents.push({
-				name: frontmatter.name,
-				description: frontmatter.description || "",
-				tools,
-				model: frontmatter.model || "nan/deepseek-v4-flash",
-				thinking: frontmatter.thinking || "medium",
-				systemPrompt: body,
-				filePath,
-				subagentAgents,
-			});
+		agents.push({
+			name: frontmatter.name,
+			description: frontmatter.description || "",
+			tools,
+			model: frontmatter.model || "nan/deepseek-v4-flash",
+			thinking: frontmatter.thinking || "medium",
+			systemPrompt: body,
+			filePath,
+			subagentAgents,
+		});
 	}
 
 	cachedAgents = agents;
@@ -444,9 +405,10 @@ export default function (pi: ExtensionAPI) {
 		agentsRegistered = false;
 		readCountThisTurn = 0;
 		currentTurnIndex = -1;
+		pendingRoutingAgent = null;
 	});
 
-	// Input pre-processor: inject routing directives when user task matches an agent
+	// Input pre-processor: detect routing intent (don't transform — inject via before_agent_start)
 	pi.on("input", (event) => {
 		// Only route for interactive user input, not for extension-sent messages
 		if (process.env.PI_IS_SUBAGENT === "1") return;
@@ -457,13 +419,12 @@ export default function (pi: ExtensionAPI) {
 		// Conservative multi-word matching — only trigger on clear intent signals
 		for (const rule of ROUTING_RULES) {
 			if (rule.keywords.some((kw) => text.includes(kw))) {
-				return {
-					action: "transform" as const,
-					text: buildRoutingMessage(rule.agent, event.text),
-				};
+				pendingRoutingAgent = rule.agent;
+				return { action: "continue" as const };
 			}
 		}
 
+		pendingRoutingAgent = null;
 		return { action: "continue" as const };
 	});
 
@@ -474,6 +435,7 @@ export default function (pi: ExtensionAPI) {
 			readCountThisTurn = 0;
 			currentTurnIndex = event.turnIndex;
 		}
+		pendingRoutingAgent = null; // Clear stale routing decision
 	});
 
 	pi.on("before_agent_start", async (event) => {
@@ -529,8 +491,37 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// Prepend rules + restrictions BEFORE the existing system prompt
+		let systemPrompt = cachedDelegationRules + "\n\n" + TOOL_RESTRICTIONS + "\n\n" + event.systemPrompt;
+
+		// Inject routing directive if input matched a routing rule
+		let routingMessage = undefined;
+		if (pendingRoutingAgent) {
+			const agent = pendingRoutingAgent;
+			pendingRoutingAgent = null;
+
+			const routingPatterns: Record<string, string> = {
+				reviewer: "CODE REVIEW",
+				planner: "IMPLEMENTATION PLANNING",
+				researcher: "WEB RESEARCH",
+			};
+			const pattern = routingPatterns[agent] || "TASK";
+
+			systemPrompt =
+				`⚠️ ROUTING REQUIREMENT: This task matches ${pattern} patterns (agent:${agent}).\n` +
+				`Dispatch agent:${agent} FIRST — direct tool use for this task type risks context overflow.\n\n` +
+				systemPrompt;
+
+			routingMessage = {
+				customType: "register-agents-routing",
+				content: `Routing directive: dispatch agent:${agent} for this ${pattern.toLowerCase()} task.`,
+				display: false,
+				details: { agent },
+			};
+		}
+
 		return {
-			systemPrompt: cachedDelegationRules + "\n\n" + TOOL_RESTRICTIONS + "\n\n" + event.systemPrompt,
+			message: routingMessage,
+			systemPrompt,
 		};
 	});
 
@@ -562,7 +553,7 @@ export default function (pi: ExtensionAPI) {
 				return {
 					block: true,
 					reason:
-						`__PI_BLOCKED__` +
+						`__PI_INTERNAL_BLOCKED__` +
 						`Direct use of \`${event.toolName}\` is blocked to protect your context window. ` +
 						`Use the \`subagent\` tool to delegate this task.\n\n` +
 						`Available agents:\n  - ${agentList}\n\n` +
@@ -591,7 +582,7 @@ export default function (pi: ExtensionAPI) {
 					return {
 						block: true,
 						reason:
-							"__PI_BLOCKED__" +
+							"__PI_INTERNAL_BLOCKED__" +
 							"Broad code searches bloat your context. Use `subagent` with `agent: scout` " +
 							"for code exploration — it runs in an isolated process and returns compressed summaries.",
 					};
@@ -600,7 +591,7 @@ export default function (pi: ExtensionAPI) {
 					return {
 						block: true,
 						reason:
-							"__PI_BLOCKED__" +
+							"__PI_INTERNAL_BLOCKED__" +
 							"Broad code searches bloat your context. Use `subagent` with `agent: scout` " +
 							"for code exploration — it runs in an isolated process and returns compressed summaries.",
 					};
@@ -620,7 +611,7 @@ export default function (pi: ExtensionAPI) {
 						return {
 							block: true,
 							reason:
-								"__PI_BLOCKED__" +
+								"__PI_INTERNAL_BLOCKED__" +
 								`Inline code execution via \`${base}\` is blocked to protect your context window. ` +
 								"Direct inline scripts produce unbounded output that bloats your context.\n\n" +
 								"Use `subagent` to delegate this task:\n" +
@@ -641,7 +632,7 @@ export default function (pi: ExtensionAPI) {
 							return {
 								block: true,
 								reason:
-									"__PI_BLOCKED__" +
+									"__PI_INTERNAL_BLOCKED__" +
 									"Inline TypeScript execution via `npx tsx -e` is blocked to protect your context window. " +
 									"Direct inline scripts produce unbounded output that bloats your context.\n\n" +
 									"Use `subagent` to delegate this task:\n" +
@@ -661,7 +652,7 @@ export default function (pi: ExtensionAPI) {
 					return {
 						block: true,
 						reason:
-							"__PI_BLOCKED__" +
+							"__PI_INTERNAL_BLOCKED__" +
 							`⚠️ READ LIMIT: ${readCountThisTurn}/${MAX_READS_PER_TURN} reads used this turn.\n\n` +
 							"Continuing to read files directly risks context overflow:\n" +
 							"  • Each raw file read consumes tokens that compound across turns\n" +
