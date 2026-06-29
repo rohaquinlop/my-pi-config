@@ -2,7 +2,7 @@
 name: scout
 description: Fast codebase recon — explores files, finds patterns, maps architecture
 tools: read, ffgrep, fffind, ls
-model: deepseek/deepseek-v4-flash
+model: nan/mimo-v2.5
 thinking: high
 ---
 

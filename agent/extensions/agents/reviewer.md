@@ -3,7 +3,7 @@ name: reviewer
 description: Code and plan review specialist for quality, security, and correctness
 tools: subagent, read, ffgrep, fffind, ls
 subagent_agents: scout
-model: deepseek/deepseek-v4-pro
+model: xiaomi-token-plan-sgp/mimo-v2.5-pro
 thinking: high
 ---
 
