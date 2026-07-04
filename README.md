@@ -83,16 +83,6 @@ The pre-processor classifies every user prompt before the main LLM responds. Cla
 | `plan-clarifier` | When user says "clarify this plan" or pastes an unclear spec | Reviews implementation plans, detects missing context, asks targeted multiple-choice questions via `clarification_ui`. |
 | `pr-description` | When user says "create a PR" or "summarize branch changes" | Generates PR description from `git diff main...HEAD`, writes `PR_DESCRIPTION.md` with title/what/why/changes sections. |
 
-## Settings
-
-- **Provider**: NaN Builders (default)
-- **Model**: `deepseek-v4-flash`
-- **Thinking Level**: `xhigh`
-- **Hidden Thinking**: enabled
-- **Package**: `git:github.com/rohaquinlop/pi-subagents`
-
-See `agent/settings.json` for the full configuration.
-
 ## Setup on a new machine
 
 1. Install Pi Coding Agent:
