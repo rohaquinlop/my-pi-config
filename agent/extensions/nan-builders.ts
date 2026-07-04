@@ -20,13 +20,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ProviderModelConfig } from "@earendil-works/pi-ai";
 
 // =============================================================================
-// Known model capabilities (from https://nan.builders/docs/api)
+// Known model capabilities (from https://nan.builders/docs/models)
 // =============================================================================
 
 interface ModelCapabilities {
   name: string;
   reasoning: boolean;
-  input: ("text" | "image")[];
+  input: ("text" | "image" | "audio")[];
   contextWindow: number;
   maxTokens: number;
   thinkingLevelMap?: Record<string, string | null>;
@@ -56,7 +56,7 @@ const KNOWN_MODELS: Record<string, ModelCapabilities> = {
   "mimo-v2.5": {
     name: "MiMo V2.5",
     reasoning: true,
-    input: ["text", "image"],
+    input: ["text", "image", "audio"],
     contextWindow: 1_000_000,
     maxTokens: 8_192,
     thinkingLevelMap: {
@@ -72,11 +72,22 @@ const KNOWN_MODELS: Record<string, ModelCapabilities> = {
       maxTokensField: "max_tokens",
     },
   },
+  "glm5.2": {
+    name: "GLM 5.2",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 256_000,
+    maxTokens: 8_192,
+    compat: {
+      supportsDeveloperRole: false,
+      maxTokensField: "max_tokens",
+    },
+  },
   "qwen3.6": {
     name: "Qwen 3.6",
     reasoning: true,
     input: ["text", "image"],
-    contextWindow: 128_000,
+    contextWindow: 256_000,
     maxTokens: 65_536,
     compat: {
       supportsDeveloperRole: false,
@@ -89,7 +100,7 @@ const KNOWN_MODELS: Record<string, ModelCapabilities> = {
     name: "Gemma 4",
     reasoning: true,
     input: ["text", "image"],
-    contextWindow: 128_000,
+    contextWindow: 256_000,
     maxTokens: 65_536,
     compat: {
       supportsDeveloperRole: false,
