@@ -107,11 +107,12 @@ See `agent/settings.json` for the full configuration.
    git clone <repo-url> ~/.pi
    ```
 
-3. Install extension dependencies:
+3. Run the setup script (installs dependencies for every tracked package —
+   root `agent/`, and each extension subpackage like `fff/`, `web-research/`,
+   `pdf-reader/`, `gh-cli/`):
 
    ```bash
-   cd ~/.pi/agent/extensions/web-research && npm install
-   cd ~/.pi/agent/extensions/pdf-reader  && npm install
+   cd ~/.pi && ./bootstrap.sh
    ```
 
 4. Set up provider authentication via `/login`:
@@ -131,7 +132,8 @@ See `agent/settings.json` for the full configuration.
 
 ## Important notes
 
-- `agent/sessions/`, `agent/node_modules/`, `agent/auth.json`, `agent/MEMORY.md`, and `agent/skill-scout.json` are gitignored.
+- `agent/sessions/`, `agent/node_modules/`, `agent/auth.json`, `agent/MEMORY.md`, `agent/trust.json`, and `agent/skill-scout.json` are gitignored (per-machine state/secrets).
+- `agent/settings.json` **is** tracked — it holds no secrets, just provider/model/theme config.
 - Do **not** commit secrets or machine-specific credentials. Authentication tokens belong in `auth.json` (gitignored).
 - After changing extensions, run `/reload` in Pi.
 - After changing `AGENTS.md` or `APPEND_SYSTEM.md`, start a new session for changes to take effect.
