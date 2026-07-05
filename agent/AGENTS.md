@@ -32,6 +32,10 @@ Always delegate to subagents for multi-step or high-context work. Refer to the a
 | Code/plan review for quality, security, correctness | `reviewer` |
 | Codebase exploration, finding patterns, mapping architecture | `scout` |
 | Code changes requiring bash (builds, tests, git, installs) | `worker` |
+| Multi-step sequential workflows (scout → plan → implement → review) | `pipeline` tool |
+| Iterative refinement with quality gating (draft → review → polish until satisfactory) | `loop` tool |
+
+When a task naturally spans multiple agent roles in sequence, prefer `pipeline` over individual `subagent` calls — it chains agents with automatic context passing via `{previous}`. When a task benefits from self-critique and progressive improvement, use `loop` — it re-runs the agent with accumulated prior outputs and can stop early when a `judge` agent is satisfied.
 
 **Anti-patterns — do NOT bypass subagents:** reading 5+ files to understand code, running inline scripts to explore, using `grep`/`find`/`web_search` directly. These operations bloat context and are blocked. Delegate to the appropriate subagent instead.
 
