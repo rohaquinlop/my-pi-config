@@ -37,7 +37,10 @@ This repository contains global Pi agent settings, instructions, extensions, ski
     ├── skills/                               # Loaded on demand by intent
     │   ├── create-pr/            SKILL.md     # PR creation with generated title/body
     │   ├── git-commit/          SKILL.md     # Conventional Commits workflow
-    │   └── plan-clarifier/      SKILL.md     # Plan clarification with multiple-choice UI
+    │   ├── handoff/             SKILL.md     # Compact conversation into handoff document
+    │   ├── init/                SKILL.md     # Scan project and generate AGENTS.md
+    │   ├── plan-clarifier/      SKILL.md     # Plan clarification with multiple-choice UI
+    │   └── release-notes/       SKILL.md     # Generate release notes via gh release
     │
     └── git/                                  # Git-backed pi packages
         └── github.com/
@@ -79,9 +82,12 @@ The pre-processor classifies every user prompt before the main LLM responds. Cla
 
 | Skill | Auto-loaded | Purpose |
 |---|---|---|
-| `git-commit` | When user asks to inspect, stage, split, or commit changes | Conventional Commits format with structured types/scopes, grouping guidelines, and execution rules. |
-| `plan-clarifier` | When user says "clarify this plan" or pastes an unclear spec | Reviews implementation plans, detects missing context, asks targeted multiple-choice questions via `clarification_ui`. |
 | `create-pr` | When user says "create a PR" or "summarize branch changes" | Creates a GitHub PR with title/body generated from `git diff <base>...HEAD`, writes `PR_DESCRIPTION.md` with title/what/why/changes sections. |
+| `git-commit` | When user asks to inspect, stage, split, or commit changes | Conventional Commits format with structured types/scopes, grouping guidelines, and execution rules. |
+| `handoff` | When user says "handoff" or needs to pass context to another agent | Compacts conversation into a structured handoff document with summary, decisions, and remaining tasks. |
+| `init` | When user says "init", "generate AGENTS.md", or "set up agents" | Scans the project to generate or update an `AGENTS.md` with tech stack, commands, conventions, and structure. |
+| `plan-clarifier` | When user says "clarify this plan" or pastes an unclear spec | Reviews implementation plans, detects missing context, asks targeted multiple-choice questions via `clarification_ui`. |
+| `release-notes` | When user says "release notes" or "create a release" | Generates release notes from merged PRs and publishes via `gh release create`. |
 
 ## Setup on a new machine
 
