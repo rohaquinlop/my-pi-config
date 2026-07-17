@@ -36,8 +36,7 @@ via `safe_bash`.
 
 Related skills to reference in plans:
 
-- **create-pr** — PR creation via `gh pr create`, `gh pr list`
-- **pr-description** — PR title/body generation from `git diff`
+- **create-pr** — PR creation with generated title/body from `git diff`
 
 Common operations a plan might include:
 

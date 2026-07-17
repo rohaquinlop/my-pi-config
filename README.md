@@ -35,9 +35,9 @@ This repository contains global Pi agent settings, instructions, extensions, ski
     │       └── package.json
     │
     ├── skills/                               # Loaded on demand by intent
+    │   ├── create-pr/            SKILL.md     # PR creation with generated title/body
     │   ├── git-commit/          SKILL.md     # Conventional Commits workflow
-    │   ├── plan-clarifier/      SKILL.md     # Plan clarification with multiple-choice UI
-    │   └── pr-description/      SKILL.md     # PR description generation
+    │   └── plan-clarifier/      SKILL.md     # Plan clarification with multiple-choice UI
     │
     └── git/                                  # Git-backed pi packages
         └── github.com/
@@ -81,7 +81,7 @@ The pre-processor classifies every user prompt before the main LLM responds. Cla
 |---|---|---|
 | `git-commit` | When user asks to inspect, stage, split, or commit changes | Conventional Commits format with structured types/scopes, grouping guidelines, and execution rules. |
 | `plan-clarifier` | When user says "clarify this plan" or pastes an unclear spec | Reviews implementation plans, detects missing context, asks targeted multiple-choice questions via `clarification_ui`. |
-| `pr-description` | When user says "create a PR" or "summarize branch changes" | Generates PR description from `git diff main...HEAD`, writes `PR_DESCRIPTION.md` with title/what/why/changes sections. |
+| `create-pr` | When user says "create a PR" or "summarize branch changes" | Creates a GitHub PR with title/body generated from `git diff <base>...HEAD`, writes `PR_DESCRIPTION.md` with title/what/why/changes sections. |
 
 ## Setup on a new machine
 

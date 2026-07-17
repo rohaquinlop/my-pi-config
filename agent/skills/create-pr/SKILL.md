@@ -1,15 +1,15 @@
 ---
 name: create-pr
 description: >
-    Create a GitHub Pull Request using the 'pr-description' skill for title/body generation.
+    Create a GitHub Pull Request with generated title/body from git diff.
     Supports optional target branch (defaults to main). Invoke when the user asks to create
     a PR, open a pull request, or submit changes via GitHub CLI.
 ---
 
 # Create PR
 
-Creates a GitHub Pull Request using `gh pr create`. Loads `pr-description` skill
-to generate the PR title and body, writes it to `PR_DESCRIPTION.md`, then submits.
+Creates a GitHub Pull Request using `gh pr create`. Generates the PR title and body
+from `git diff`, writes it to `PR_DESCRIPTION.md`, then submits.
 
 ## Usage
 
@@ -20,9 +20,42 @@ Examples:
 - "Create a PR for staging" → targets `staging`
 - "Create a PR against release-v2" → targets `release-v2`
 
+## PR Description Format
+
+When generating the PR description:
+
+1. Run `git diff <base>...HEAD` (where `<base>` is the target branch) to see all changes on this branch.
+2. Create or overwrite `PR_DESCRIPTION.md` in the repository root.
+3. Write the PR description into `PR_DESCRIPTION.md` following the format below.
+4. Final response must mention the file path and briefly summarize what was written.
+
+Output requirements:
+
+- MUST use the write tool to create or update `PR_DESCRIPTION.md`.
+- MUST NOT only print the PR description in chat unless the user explicitly asks for chat-only output.
+- If `PR_DESCRIPTION.md` was not written, the task is incomplete.
+
+### Title suggestion
+
+Short and descriptive title suggestion for the PR
+
+### What
+
+One sentence explaining what this PR does.
+
+### Why
+
+Brief context on why this change is needed.
+
+### Changes
+
+- Bullet points of specific changes made
+- Group related changes together
+- Mention any files deleted or renamed
+
 ## Workflow
 
-1. **Load `pr-description` skill** with the target base branch and follow its instructions to generate `PR_DESCRIPTION.md` (title + body from `git diff <base>...HEAD`).
+1. **Generate the PR description** following the format above — run `git diff <target-branch>...HEAD`, then create `PR_DESCRIPTION.md` with the title and body.
 2. **Determine target branch**: if user specified a branch, use that; otherwise `main`.
 3. **Read `PR_DESCRIPTION.md`** to extract the title (first line, stripped of `## Title suggestion` prefix) and body (everything after the title block).
 4. **Create PR via `gh pr create`**:

@@ -68,7 +68,6 @@ When a task naturally spans multiple agent roles in sequence, prefer `pipeline` 
 │   ├── git-commit/
 │   ├── handoff/
 │   ├── plan-clarifier/
-│   ├── pr-description/
 │   └── release-notes/
 ├── npm/                         # npm-installed pi packages
 └── git/                         # Git-backed pi packages
@@ -90,11 +89,10 @@ Skills load on-demand when a task matches their description. Use `read` to load 
 
 | Skill | Purpose |
 |---|---|
-| `create-pr` | GitHub PR creation via `gh pr create`; uses `pr-description` skill |
+| `create-pr` | GitHub PR creation with generated title/body from `git diff` |
 | `git-commit` | Conventional Commits workflow — load before any `git commit` |
 | `handoff` | Compact conversation into a handoff document for another agent |
 | `plan-clarifier` | Interactive plan clarification with multiple-choice UI |
-| `pr-description` | PR description generation from `git diff main...HEAD` |
 | `release-notes` | Generate release notes and publish via `gh release create` |
 
 ## Agent Conventions

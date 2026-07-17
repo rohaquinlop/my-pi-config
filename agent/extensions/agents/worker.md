@@ -49,8 +49,8 @@ Always use `--json` flags for machine-readable output when you need to parse
 results. Check exit codes and handle errors gracefully. If `gh` is not
 authenticated, run `gh auth status` to diagnose and report the issue.
 
-When the task involves PR creation, load the `create-pr` and `pr-description`
-skills which have complete workflows for that operation.
+When the task involves PR creation, load the `create-pr` skill which has
+complete workflows for that operation.
 
 ## Delegation — protecting your context window
 
