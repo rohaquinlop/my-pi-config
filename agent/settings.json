@@ -5,8 +5,8 @@
     "npm:@rohaquinlop/pi-deepseek-cache",
     "npm:@rohaquinlop/pi-subagents"
   ],
-  "defaultProvider": "nan",
-  "defaultModel": "glm5.2",
+  "defaultProvider": "xiaomi-token-plan-sgp",
+  "defaultModel": "mimo-v2.5-pro",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": true,
   "retry": {
