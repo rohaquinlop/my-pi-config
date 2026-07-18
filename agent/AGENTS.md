@@ -56,7 +56,6 @@ When a task naturally spans multiple agent roles in sequence, prefer `pipeline` 
 │   │   └── worker.md
 │   ├── register-agents.ts       # Auto-generates delegation table & tool restrictions
 │   ├── plan-clarifier-ui.ts     # clarification_ui tool
-│   ├── nan-builders.ts          # NaN Builders custom provider
 │   ├── deepseek-cache/          # DeepSeek caching extension
 │   ├── fff/                      # frecency file find tools
 │   ├── gh-cli/                   # GitHub CLI tool
@@ -79,7 +78,6 @@ Extensions provide these tools to agents:
 
 - **`register-agents.ts`** — Auto-enforcement: generates the delegation table, blocks direct `grep`/`find`/`ffgrep`/`fffind`/`web_search`/`bash-grep` for the main agent, and redirects those operations to the `scout` or `researcher` subagent.
 - **`plan-clarifier-ui.ts`** — Provides the `clarification_ui` tool for interactive multiple-choice plan clarification.
-- **`nan-builders.ts`** — NaN Builders custom provider with dynamic model fetching.
 
 Other extensions (`deepseek-cache`, `fff`, `gh-cli`, `pdf-reader`, `web-research`, `compact-progress`, `compact-tool-renderer`, `working-words`) provide additional capabilities but don't define agent-facing tools.
 
