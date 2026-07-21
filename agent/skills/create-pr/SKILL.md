@@ -35,29 +35,45 @@ Output requirements:
 - MUST NOT only print the PR description in chat unless the user explicitly asks for chat-only output.
 - If `PR_DESCRIPTION.md` was not written, the task is incomplete.
 
-### Title suggestion
+### Template
 
-Short and descriptive title suggestion for the PR
+The file has two distinct sections — the title block and the body. The title is the first non-empty line after `## Title suggestion`. The body is everything from `## What` onwards.
 
-### What
+```markdown
+## Title suggestion
+
+<short descriptive title here>
+
+## What
 
 One sentence explaining what this PR does.
 
-### Why
+## Why
 
 Brief context on why this change is needed.
 
-### Changes
+## Changes
 
 - Bullet points of specific changes made
 - Group related changes together
 - Mention any files deleted or renamed
+```
 
 ## Workflow
 
 1. **Generate the PR description** following the format above — run `git diff <target-branch>...HEAD`, then create `PR_DESCRIPTION.md` with the title and body.
 2. **Determine target branch**: if user specified a branch, use that; otherwise `main`.
-3. **Read `PR_DESCRIPTION.md`** to extract the title (first line, stripped of `## Title suggestion` prefix) and body (everything after the title block).
+3. **Read `PR_DESCRIPTION.md`** to extract title and body:
+   - **Title**: the first non-empty line after `## Title suggestion`. Do not include the header itself.
+   - **Body**: everything from `## What` onwards (inclusive). This excludes the `## Title suggestion` block entirely.
+
+   Extraction example:
+   ```bash
+   # Title: first non-empty line after "## Title suggestion"
+   TITLE=$(sed -n '/^## Title suggestion/,/^##/{/^##/d;/^$/d;p;}' PR_DESCRIPTION.md | head -1)
+   # Body: everything from "## What" to end of file
+   BODY=$(sed -n '/^## What/,$p' PR_DESCRIPTION.md)
+   ```
 4. **Create PR via `gh pr create`**:
 
    ```bash

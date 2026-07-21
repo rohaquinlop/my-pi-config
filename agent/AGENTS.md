@@ -106,6 +106,10 @@ When implementing a requested change, do the full high-quality implementation th
 - Only defer work when it is genuinely unrelated, risky/destructive, requires a product decision, or would be disproportionately large. In that case, say clearly why it was not done.
 - Prefer fewer, complete, well-designed changes over quick partial patches.
 
+### Committing changes
+
+Only commit changes when asked for, never do it by your own if there's no explicit instruction by the user or skill mention.
+
 ### Execution Continuity
 
 See [`APPEND_SYSTEM.md`](./APPEND_SYSTEM.md) for the DONE/BLOCKED/FAILED response contract and continuation rules.

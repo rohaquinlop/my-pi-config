@@ -43,15 +43,25 @@ Release, and optionally create the git tag.
   git log --format="%h %s" <prev-tag>..HEAD
   ```
 
-- Get all **merged PRs** in this range:
+- Get the **tag date** (needed to filter PRs by merge date):
   ```bash
-  gh pr list --state merged --base main --json number,title,author,mergedAt,url,labels \
-    --jq '.[] | select(.mergedAt > <prev-tag-date>)'
+  git log -1 --format="%ci" <prev-tag>
   ```
-  Or use the merge commits:
+
+- Get all **merged PRs** in this range — prefer the merge-commit approach first
+  (more reliable), then cross-reference with `gh pr list` for author/URL details:
   ```bash
+  # List merge commits to identify PR numbers in range
   git log --merges --format="%h %s" <prev-tag>..HEAD
+
+  # Then fetch full PR details for those numbers
+  gh pr list --state merged --base main --json number,title,author,mergedAt,url \
+    --jq '.[] | select(.mergedAt > "<prev-tag-date>")'
   ```
+
+- **Verify version in source file matches intent** — if the version file shows a
+  version different from what the user requested, check the git log for version
+  bump commits to understand the actual state (e.g. a bumped-then-reverted scenario).
 
 - Detect **new contributors** by checking if any PR author has no prior merged PRs:
   ```bash
@@ -95,7 +105,7 @@ Group commits into sections based on their conventional commit prefix:
 For **patch releases**, prefix sections with `##`. For **minor feature releases**,
 `##` or `###` both appear in past practice — follow the most recent style.
 
-### 5. Write the release notes body
+### 5. Write the release notes body and save to file
 
 Use this structure, adapting to the detected project style:
 
@@ -128,6 +138,16 @@ Rules:
 - Formatting: use backticks for code, file paths, flags, and types.
 - PR references: use `(#NN)` shorthand within sections, full link in PRs section.
 - The Full Changelog link always compares the previous tag to the new one.
+
+**Always save the notes to a file** in the project root so the user can easily
+review, edit, and copy them:
+
+```
+RELEASE_NOTES_<version>.md
+```
+
+Present a summary of the notes to the user, then ask whether they want to
+publish (create tag + GitHub release) or make edits first.
 
 ### 6. Create the tag (if requested)
 
