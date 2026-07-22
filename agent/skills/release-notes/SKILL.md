@@ -200,6 +200,33 @@ gh release view <version> --json name,tagName,url --jq '{name, tagName, url}'
 | Auto-release pipeline already created a release | Check with `gh release view <tag>`; if exists, prompt user before overwriting |
 | Multiple repos | Use the current working directory's git remote to infer owner/repo |
 
+## Downstream Release Verification
+
+If the project has a **notify-downstream** workflow that dispatches release
+events to other repos (e.g. pre-commit hooks, GitHub Actions, companion
+packages), verify that those downstream repos' workflows actually **create
+GitHub Releases**, not just push tags.
+
+Common failure pattern: a downstream `update-version.yml` workflow does
+`git tag && git push` but lacks `gh release create`. The tag gets pushed,
+no release is created, and the dispatch appears "successful" in the upstream
+pipeline logs.
+
+**Check:** After publishing, inspect downstream repos:
+```bash
+gh release view <tag> --repo <downstream-owner/repo> --json tagName
+```
+
+If missing, add to the downstream workflow:
+```yaml
+- name: Create GitHub Release
+  env:
+    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: |
+    VERSION="${{ github.event.client_payload.version }}"
+    gh release create "v${VERSION}" --title "v${VERSION}" --generate-notes
+```
+
 ## Style Reference
 
 This project follows a professional tone without emoji section markers,
