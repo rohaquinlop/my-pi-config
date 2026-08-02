@@ -1,9 +1,0 @@
-{
-  "dependencies": {
-    "@ff-labs/fff-node": "^0.9.6",
-    "@mozilla/readability": "^0.6.0",
-    "jsdom": "^29.1.1",
-    "pdf-parse": "^2.4.5",
-    "turndown": "^7.2.4"
-  }
-}
