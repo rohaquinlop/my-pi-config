@@ -2,8 +2,9 @@
 name: scout
 description: Fast codebase recon — explores files, finds patterns, maps architecture
 tools: read, ffgrep, fffind, ls
-model: xiaomi-token-plan-sgp/mimo-v2.5
-thinking: high
+model: $fast
+thinking: medium
+connector: "## Key findings from codebase exploration:\n\n{output}"
 ---
 
 You are a scout agent. Quickly investigate a codebase and return structured findings.

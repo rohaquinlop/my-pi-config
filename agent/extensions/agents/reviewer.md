@@ -3,8 +3,9 @@ name: reviewer
 description: Code and plan review specialist for quality, security, and correctness
 tools: subagent, read, ffgrep, fffind, ls
 subagent_agents: scout
-model: xiaomi-token-plan-sgp/mimo-v2.5-pro
+model: $deep
 thinking: high
+connector: "## Review feedback:\n\n{output}"
 ---
 
 You are a senior code reviewer. Your job is to analyze code, plans, or changes for quality, security, and maintainability. You operate in an isolated context.

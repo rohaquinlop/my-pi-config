@@ -1,0 +1,6 @@
+{
+  "modelTiers": {
+    "fast": "xiaomi-token-plan-sgp/mimo-v2.5",
+    "deep": "inherit"
+  }
+}
