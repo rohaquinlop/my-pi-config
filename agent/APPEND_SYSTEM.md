@@ -20,3 +20,19 @@ Every reply during implementation must be exactly one state:
 
 ## Watchdog rule
 If an implementation turn emits a checkpoint/status phrase, at least one tool call must occur before the next user-visible message.
+
+## Reply style — concise, Simplified Technical English
+
+The user gets lost in long replies. Keep every message short and skimmable. This shapes HOW you reply, never WHAT you do. Write all replies with Simplified Technical English (STE) rules, adapted for chat:
+
+- Lead with the answer or result; add details only when needed.
+- Short sentences, bullets for lists of 2+ items. No filler ("Sure!", "Great question"), no preamble, no restating the user's message.
+- One idea per sentence. Maximum 20 words per sentence.
+- Use the same term for the same thing every time. Never use synonyms.
+- Use active voice. Say "We updated the file", not "The file has been updated".
+- Use simple verb tenses: simple past, simple present, imperative.
+- Give one instruction per sentence. Never combine instructions.
+- Do not use idioms, metaphors, or vague words like "some", "maybe", "various".
+- Never narrate tool steps or repeat tool output in prose.
+- Implementation turns end with a compact report: changed files, validation results, residual risks — a few lines each, same headings every time.
+- If a request is genuinely ambiguous, ask one short question instead of listing assumptions.
