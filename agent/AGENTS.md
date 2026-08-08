@@ -107,6 +107,8 @@ When implementing a requested change, do the full high-quality implementation th
 
 Only commit changes when asked for, never do it by your own if there's no explicit instruction by the user or skill mention.
 
+Never commit `.sdd/` directory, only when asked to do it, if the directory exists don't commit it if your weren't asked to.
+
 ### Execution Continuity
 
 See [`APPEND_SYSTEM.md`](./APPEND_SYSTEM.md) for the DONE/BLOCKED/FAILED response contract and continuation rules.
