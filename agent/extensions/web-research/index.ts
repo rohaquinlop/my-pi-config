@@ -261,6 +261,175 @@ function wrapContent(
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Module 3.5: Request Throttling — concurrency cap, pacing, retry
+// ══════════════════════════════════════════════════════════════════════
+
+/** Max concurrent outbound requests. Prevents burst-triggered blocks. */
+const MAX_CONCURRENT_REQUESTS = 2;
+/** Min gap between any two outbound requests. */
+const MIN_REQUEST_GAP_MS = 1_200;
+/** Min gap between requests to the same host. */
+const MIN_HOST_GAP_MS = 1_500;
+/** Statuses worth retrying (rate limits + transient server errors). */
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const MAX_RETRIES = 3;
+const BASE_RETRY_DELAY_MS = 1_000;
+const MAX_RETRY_DELAY_MS = 8_000;
+
+let activeRequests = 0;
+let lastRequestAt = 0;
+const lastHostAt = new Map<string, number>();
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal?.aborted) {
+			reject(signal.reason instanceof Error ? signal.reason : new Error("Request aborted"));
+			return;
+		}
+		const timer = setTimeout(() => {
+			signal?.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(signal?.reason instanceof Error ? signal.reason : new Error("Request aborted"));
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+	});
+}
+
+/** Jittered backoff: 0.75–1.25× of the base delay. */
+function jitterDelay(ms: number): number {
+	return Math.round(ms * (0.75 + Math.random() * 0.5));
+}
+
+/** Merge an optional caller signal with a per-attempt timeout. */
+function mergeSignals(
+	callerSignal: AbortSignal | undefined,
+	timeout: AbortSignal,
+): AbortSignal {
+	if (!callerSignal) return timeout;
+	try {
+		return AbortSignal.any([callerSignal, timeout]);
+	} catch {
+		return callerSignal;
+	}
+}
+
+/**
+ * Wait for a concurrency slot plus the min gap since the last request
+ * (global and per-host). Returns a release function for the slot.
+ * The slot is held during the pacing wait so the cap stays strict, and the
+ * gap is re-checked after sleeping so request starts never bunch up.
+ */
+async function acquireRequestSlot(
+	hostname: string,
+	signal?: AbortSignal,
+): Promise<() => void> {
+	while (activeRequests >= MAX_CONCURRENT_REQUESTS) {
+		if (signal?.aborted) throw new Error("Request aborted");
+		await sleep(100, signal);
+	}
+	// No await between the check above and the increment — the slot is
+	// taken atomically.
+	activeRequests++;
+	let released = false;
+	const release = () => {
+		if (!released) {
+			released = true;
+			activeRequests--;
+		}
+	};
+	try {
+		// Re-check the gap after each sleep: another request may have started
+		// while we were waiting, and then we must wait out the rest.
+		while (true) {
+			const now = Date.now();
+			const gap = Math.max(
+				MIN_REQUEST_GAP_MS - (now - lastRequestAt),
+				MIN_HOST_GAP_MS - (now - (lastHostAt.get(hostname) ?? 0)),
+				0,
+			);
+			if (gap <= 0) break;
+			await sleep(gap, signal);
+		}
+		lastRequestAt = Date.now();
+		lastHostAt.set(hostname, Date.now());
+		return release;
+	} catch (e) {
+		release();
+		throw e;
+	}
+}
+
+interface ThrottledFetchOptions {
+	hostname?: string;
+	timeoutMs?: number;
+	signal?: AbortSignal;
+	/** Treat HTTP 403 as retryable (anti-bot blocks sometimes clear). */
+	retry403?: boolean;
+}
+
+/**
+ * Single outbound HTTP entry point: pacing + concurrency cap + retry with
+ * exponential backoff on rate-limit/transient statuses. Honors Retry-After
+ * and the caller's AbortSignal. Every web request must go through here.
+ */
+async function throttledFetch(
+	url: string,
+	init: RequestInit,
+	options: ThrottledFetchOptions = {},
+): Promise<Response> {
+	const timeoutMs = options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+	const hostname =
+		options.hostname ??
+		(() => {
+			try {
+				return new URL(url).hostname;
+			} catch {
+				return "unknown";
+			}
+		})();
+	let lastResponse: Response | undefined;
+
+	for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+		const release = await acquireRequestSlot(hostname, options.signal);
+		try {
+			const mergedSignal = mergeSignals(
+				options.signal,
+				AbortSignal.timeout(timeoutMs),
+			);
+			const response = await fetch(url, { ...init, signal: mergedSignal });
+			lastResponse = response;
+
+			if (attempt >= MAX_RETRIES) return response;
+			const retryable =
+				RETRYABLE_STATUS.has(response.status) ||
+				(options.retry403 && response.status === 403);
+			if (!retryable) return response;
+
+			// Free the connection before backing off.
+			await response.body?.cancel().catch(() => {});
+			const retryAfterMs = Number(response.headers.get("retry-after")) * 1000;
+			const base =
+				options.retry403 && response.status === 403 ? 3_000 : BASE_RETRY_DELAY_MS;
+			const delay = jitterDelay(
+				Math.min(
+					MAX_RETRY_DELAY_MS,
+					Number.isFinite(retryAfterMs) && retryAfterMs > 0
+						? retryAfterMs
+						: base * 2 ** attempt,
+				),
+			);
+			await sleep(delay, options.signal);
+		} finally {
+			release();
+		}
+	}
+	return lastResponse!;
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Module 4: Fetch Module
 // ══════════════════════════════════════════════════════════════════════
 
@@ -297,29 +466,18 @@ async function secureFetch(
 		throw new Error(`DNS resolved to private IP`);
 	}
 
-	// 3. Build merged timeout signal (AbortSignal.any fallback for older Node)
-	const fetchTimeout = AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT_MS);
-	let mergedSignal: AbortSignal;
-	try {
-		mergedSignal = signal
-			? AbortSignal.any([fetchTimeout, signal])
-			: fetchTimeout;
-	} catch {
-		mergedSignal = signal ?? fetchTimeout;
-	}
-
+	// 3. Fetch with manual redirect handling
 	const fetchHeaders = {
 		"user-agent": UA,
 		accept:
 			"text/html,application/xhtml+xml,text/plain,application/json,application/xml,text/*,*/*;q=0.8",
 	};
 
-	// 3. Fetch with manual redirect handling
-	let response = await fetch(urlString, {
-		signal: mergedSignal,
-		headers: fetchHeaders,
-		redirect: "manual",
-	});
+	let response = await throttledFetch(
+		urlString,
+		{ headers: fetchHeaders, redirect: "manual" },
+		{ hostname: inputUrlObj.hostname, signal },
+	);
 
 	// 4. Manual redirect loop — each redirect triggers resolveAndPinIP()
 	let redirectCount = 0;
@@ -345,11 +503,11 @@ async function secureFetch(
 		}
 
 		redirectCount++;
-		response = await fetch(redirectUrl, {
-			signal: mergedSignal,
-			headers: fetchHeaders,
-			redirect: "manual",
-		});
+		response = await throttledFetch(
+			redirectUrl,
+			{ headers: fetchHeaders, redirect: "manual" },
+			{ hostname: redirectHostname, signal },
+		);
 		finalUrl = response.url || redirectUrl;
 	}
 
@@ -754,25 +912,17 @@ async function braveSearch(
 	url.searchParams.set("count", String(Math.min(limit, 20)));
 	url.searchParams.set("text_decorations", "false");
 
-	const fetchTimeout = AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT_MS);
-	const mergedSignal = signal
-		? (() => {
-				try {
-					return AbortSignal.any([fetchTimeout, signal]);
-				} catch {
-					return signal ?? fetchTimeout;
-				}
-			})()
-		: fetchTimeout;
-
-	const response = await fetch(url.toString(), {
-		signal: mergedSignal,
-		headers: {
-			"user-agent": UA,
-			accept: "application/json",
-			"x-subscription-token": key,
+	const response = await throttledFetch(
+		url.toString(),
+		{
+			headers: {
+				"user-agent": UA,
+				accept: "application/json",
+				"x-subscription-token": key,
+			},
 		},
-	});
+		{ hostname: "api.search.brave.com", signal },
+	);
 	const text = await response.text();
 	if (!response.ok) throw new Error(`Search failed: HTTP ${response.status}`);
 
@@ -797,27 +947,19 @@ async function duckDuckGoSearch(
 	limit: number,
 	signal?: AbortSignal,
 ): Promise<SearchResult[]> {
-	const fetchTimeout = AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT_MS);
-	const mergedSignal = signal
-		? (() => {
-				try {
-					return AbortSignal.any([fetchTimeout, signal]);
-				} catch {
-					return signal ?? fetchTimeout;
-				}
-			})()
-		: fetchTimeout;
-
 	const body = new URLSearchParams({ q: cleanUnicode(query) });
-	const response = await fetch("https://html.duckduckgo.com/html/", {
-		method: "POST",
-		signal: mergedSignal,
-		headers: {
-			"user-agent": UA,
-			"content-type": "application/x-www-form-urlencoded",
+	const response = await throttledFetch(
+		"https://html.duckduckgo.com/html/",
+		{
+			method: "POST",
+			headers: {
+				"user-agent": UA,
+				"content-type": "application/x-www-form-urlencoded",
+			},
+			body,
 		},
-		body,
-	});
+		{ hostname: "html.duckduckgo.com", signal, retry403: true },
+	);
 	const text = await response.text();
 	if (!response.ok) throw new Error(`Search failed: HTTP ${response.status}`);
 
@@ -851,32 +993,50 @@ async function duckDuckGoSearch(
 	return results;
 }
 
-/** Brave → DDG fallback. */
+/** Brave → DDG fallback. Returns results plus an optional warning. */
 async function runSearch(
 	query: string,
 	limit: number,
 	signal?: AbortSignal,
 	onUpdate?: (u: { content: Array<{ type: string; text: string }> }) => void,
-): Promise<SearchResult[]> {
+): Promise<{ results: SearchResult[]; warning?: string }> {
+	let warning: string | undefined;
 	let results = await braveSearch(query, limit, signal).catch(async (e) => {
-		if (process.env.BRAVE_API_KEY)
+		if (process.env.BRAVE_API_KEY) {
+			const msg = e instanceof Error ? e.message : "Unknown error";
+			warning = `Brave search failed: ${msg}`;
 			onUpdate?.({
 				content: [
 					{
 						type: "text",
-						text: `Brave failed, trying fallback: ${e.message}`,
+						text: `Brave failed, trying fallback: ${msg}`,
 					},
 				],
 			});
+		}
 		return [] as SearchResult[];
 	});
-	if (results.length === 0)
-		results = await duckDuckGoSearch(query, limit, signal);
-	return results;
+	if (results.length === 0) {
+		try {
+			results = await duckDuckGoSearch(query, limit, signal);
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : "Unknown error";
+			// Degrade instead of hard-failing: a persistent anti-bot block
+			// should surface as a note, not a tool error the agent retries
+			// in a loop (which worsens the rate limit).
+			warning = `Search provider rate-limited or blocked (${msg}). Set BRAVE_API_KEY for reliable search.`;
+			results = [];
+		}
+	}
+	return { results, warning };
 }
 
 /** Format search results for LLM consumption — sanitized, wrapped with wrapContent. */
-function formatSearchResults(results: SearchResult[]): string {
+function formatSearchResults(
+	results: SearchResult[],
+	warning?: string,
+): string {
+	const note = warning ? `Note: ${warning}\n\n` : "";
 	const lines = results
 		.map(
 			(r, i) =>
@@ -884,7 +1044,7 @@ function formatSearchResults(results: SearchResult[]): string {
 		)
 		.join("\n\n");
 	return wrapContent(
-		lines || "No results.",
+		note + (lines || "No results."),
 		TrustTier.SearchResults,
 		`web_search`,
 	);
@@ -1045,11 +1205,16 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 					{ type: "text", text: `Searching web: ${params.query}` },
 				],
 			});
-			const results = await runSearch(params.query, limit, signal, onUpdate);
-			const text = formatSearchResults(results);
+			const results = await runSearch(
+				params.query,
+				limit,
+				signal,
+				onUpdate,
+			);
+			const text = formatSearchResults(results.results, results.warning);
 			return {
 				content: [{ type: "text", text }],
-				details: { query: params.query, limit, results },
+				details: { query: params.query, limit, results: results.results },
 			};
 		},
 	});
@@ -1185,7 +1350,7 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 					},
 				],
 			});
-			const results = await runSearch(
+			const { results, warning } = await runSearch(
 				params.query,
 				searchLimit,
 				signal,
@@ -1262,6 +1427,7 @@ export default function webResearchExtension(pi: ExtensionAPI) {
 			const summary = [
 				`Web Research: ${params.query}`,
 				`Fetched: ${fetched.length} sources, ${results.length} total results`,
+				...(warning ? [`Note: ${warning}`, ""] : []),
 				"",
 				"## Fetched Sources",
 				"",
