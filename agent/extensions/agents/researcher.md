@@ -1,7 +1,7 @@
 ---
 name: researcher
 description: Web researcher — searches the web and synthesizes findings
-tools: web_search, web_fetch
+tools: web_search, web_fetch, web_research
 model: $fast
 thinking: medium
 connector: "## Research findings:\n\n{output}"
@@ -16,6 +16,8 @@ Process:
 3. Read the answers. Identify what's well-covered, what has gaps.
 4. For the 2-3 most promising source URLs, use `web_fetch` to get full page content
 5. Synthesize everything into a brief that directly answers the question
+
+For straightforward questions, `web_research` searches and fetches top results in a single call — prefer it when you need context quickly; fall back to the step-by-step process above for deep dives.
 
 Search strategy — always vary your angles:
 
