@@ -128,7 +128,9 @@ async function resolveAndPinIP(
 				return { ip: entry.address }; // signal caller to throw
 			}
 		}
-		return results.length > 0 ? { ip: results[0].address } : null;
+		// All resolved IPs are public — return null so the caller proceeds.
+		// (Returning { ip } here would make the caller throw for every site.)
+		return null;
 	} catch {
 		return null; // DNS failures let fetch fail naturally
 	}
