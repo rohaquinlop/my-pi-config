@@ -1,0 +1,12 @@
+{
+  "name": "pi-extension-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runtime dependencies for pi extensions that resolve from ~/.pi/agent/node_modules",
+  "dependencies": {
+    "@mozilla/readability": "0.6.0",
+    "jsdom": "29.1.1",
+    "pdf-parse": "2.4.5",
+    "turndown": "7.2.4"
+  }
+}
