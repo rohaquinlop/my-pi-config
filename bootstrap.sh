@@ -12,8 +12,11 @@
 #      settings.json is gitignored (it accumulates per-machine provider/model
 #      state), so a fresh clone has none — without this step pi starts with
 #      empty defaults and no `packages`.
-#   3. Runs `npm install` in every tracked package (root + extension subpackages).
+#   3. Runs `npm ci` in every tracked package (root + extension subpackages).
 #      Uses `git ls-files` so runtime-only dirs (node_modules/, agent/npm/) are skipped.
+#      Every tracked package has a committed lockfile; keep it in sync with the
+#      manifest (npm install --package-lock-only) so ci fails loudly instead of
+#      silently re-resolving versions.
 #   4. Installs each pi package listed in the template via `pi install`. pi does
 #      NOT auto-install packages named in settings.json — it only resolves them
 #      from disk — so this is what actually puts the subagent runtime in place.
@@ -75,16 +78,16 @@ echo "==> Installing dependencies for tracked packages..."
 fail=0
 while IFS= read -r pkg; do
   dir="$(dirname "$pkg")"
-  echo "   npm install in $dir"
-  if ! (cd "$dir" && npm install --no-audit --no-fund --silent); then
-    echo "   WARNING: npm install failed in $dir"
+  echo "   npm ci in $dir"
+  if ! (cd "$dir" && npm ci --no-audit --no-fund --silent); then
+    echo "   WARNING: npm ci failed in $dir"
     fail=1
   fi
 done < <(git ls-files '*/package.json' 'package.json')
 
 if [ "$fail" -ne 0 ]; then
   echo
-  echo "ERROR: one or more npm installs failed. See warnings above."
+  echo "ERROR: one or more npm ci runs failed. See warnings above."
   exit 1
 fi
 echo
