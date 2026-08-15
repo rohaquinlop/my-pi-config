@@ -113,6 +113,18 @@ Never commit `.sdd/` directory, only when asked to do it, if the directory exist
 
 See [`APPEND_SYSTEM.md`](./APPEND_SYSTEM.md) for the DONE/BLOCKED/FAILED response contract and continuation rules.
 
+### Extension Runtime Dependencies
+
+Extension sources in `extensions/` resolve third-party imports (`jsdom`, `pdf-parse`, `turndown`, `@mozilla/readability`) by walking up to `~/.pi/agent/node_modules`. That directory is a plain `npm ci` install declared by [`package.json`](./package.json) at this level — nothing regenerates it automatically.
+
+To install or reinstall the extension runtime dependencies:
+
+```bash
+cd ~/.pi/agent && npm ci
+```
+
+When adding a runtime dependency to an extension, declare it here too and refresh the lockfile with `npm install --package-lock-only`.
+
 ### Python Workflow
 
 Prefer `uv` whenever working with Python, if available. See [`UV.md`](./UV.md) for the full command reference.
