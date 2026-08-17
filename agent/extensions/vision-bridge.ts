@@ -16,12 +16,30 @@
  * same image costs no extra vision call. Temp files are removed on
  * session_shutdown.
  *
+ * The vision model override is persisted to ~/.pi/agent/vision-bridge-config.json
+ * so it survives new sessions and pi relaunches. Session entries are also written
+ * for branch history. If the config file is missing or corrupt, falls back to
+ * auto-pick.
+ *
+ * Image detection supports two modes:
+ *   - Base64-embedded images in event.images (direct attachment)
+ *   - File paths in event.text (pi's paste-as-path behavior)
+ *   - Clipboard paste via ctrl+v / alt+v (reads image from clipboard directly)
+ *
+ * The extension intercepts ctrl+v and alt+v to read images directly from the
+ * clipboard (like Codex CLI), bypassing pi's sandboxed paste handler. When no
+ * image is found, it falls back to normal text paste.
+ *
  * Commands:
  *   /vision-bridge-model <provider/model-id>   set the bridge vision model
  *   /vision-bridge-status                      show bridge state
  *
  * Tool:
  *   read_image(path, question?)                ask the vision model about a saved image
+ *
+ * Keyboard shortcuts:
+ *   ctrl+v   paste image from clipboard via vision bridge (text fallback)
+ *   alt+v    paste image from clipboard via vision bridge (text fallback)
  */
 
 import type {
@@ -32,12 +50,19 @@ import type {
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { extname, join, resolve } from "node:path";
+import { access, constants, mkdir, readFile, rm, stat as statFile, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { extname, join, dirname, resolve } from "node:path";
 import { Type } from "typebox";
 
 const BRIDGE_ENTRY = "vision-bridge";
+
+const CONFIG_PATH = join(
+	process.env.HOME || homedir(),
+	".pi",
+	"agent",
+	"vision-bridge-config.json",
+);
 
 const DESCRIBE_PROMPT = `You are the vision component of a coding agent whose main model cannot see images.
 Describe the attached image thoroughly and factually, so the main model can work with it without ever seeing it.
@@ -66,6 +91,7 @@ interface BridgeState {
 /** image hash -> description */
 const cache = new Map<string, string>();
 let overrideModelId: string | undefined;
+let overrideSource: "config" | "session" | undefined;
 let notifiedNoVision = false;
 let currentSessionDir: string | undefined;
 
@@ -158,13 +184,174 @@ function loadOverride(ctx: ExtensionContext): string | undefined {
 	return found;
 }
 
+/** Read the override from the config file. Returns undefined on any error. */
+async function loadConfig(): Promise<string | undefined> {
+	try {
+		const raw = await readFile(CONFIG_PATH, "utf8");
+		const parsed = JSON.parse(raw) as BridgeState;
+		if (parsed.overrideModelId && typeof parsed.overrideModelId === "string") {
+			return parsed.overrideModelId;
+		}
+		return undefined;
+	} catch {
+		// File missing, unreadable, or corrupt — not an error, just no config.
+		return undefined;
+	}
+}
+
+/** Write the override to the config file. Warns on failure. */
+async function saveConfig(data: BridgeState): Promise<void> {
+	try {
+		const dir = dirname(CONFIG_PATH);
+		await mkdir(dir, { recursive: true });
+		await writeFile(CONFIG_PATH, JSON.stringify(data, null, 2) + "\n", "utf8");
+	} catch (error) {
+		console.warn(`[vision-bridge] failed to save config: ${errorMessage(error)}`);
+	}
+}
+
+/** Delete the config file. Warns on failure. */
+async function deleteConfig(): Promise<void> {
+	try {
+		await rm(CONFIG_PATH, { force: true });
+	} catch (error) {
+		console.warn(`[vision-bridge] failed to delete config: ${errorMessage(error)}`);
+	}
+}
+
+/**
+ * Read image from clipboard using platform-specific commands.
+ * Returns { data: base64, mimeType } or undefined if no image.
+ */
+async function readClipboardImage(exec: (cmd: string, args: string[], opts?: any) => Promise<{ stdout: string; stderr: string }>): Promise<{ data: string; mimeType: string } | undefined> {
+	try {
+		// macOS: use osascript to check for and read clipboard image
+		const checkResult = await exec("osascript", [
+			"-e",
+			`try
+				set img to the clipboard as «class PNGf»
+				return length of img
+			on error
+				return "0"
+			end try`,
+		]);
+		
+		if (checkResult.stdout.trim() === "0") return undefined;
+		
+		// Read the actual image data
+		const readResult = await exec("osascript", [
+			"-e",
+			`set img to the clipboard as «class PNGf»
+			return img`,
+		]);
+		
+		// The output is hex-encoded PNG data wrapped in «»
+		const hexMatch = readResult.stdout.match(/«data PNGf([0-9A-Fa-f]+)»/);
+		if (!hexMatch) return undefined;
+		
+		const hex = hexMatch[1];
+		const bytes = Buffer.from(hex, "hex");
+		return {
+			data: bytes.toString("base64"),
+			mimeType: "image/png",
+		};
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Scan text for image file paths. Returns valid, readable image paths.
+ * Handles both quoted and unquoted paths (pi's paste-as-path behavior).
+ */
+async function findImagePaths(text: string): Promise<string[]> {
+	const candidates: string[] = [];
+
+	// Match quoted paths (single or double quotes)
+	const quotedRegex = /["']([^"']+\.(?:png|jpe?g|gif|webp|bmp|svg|ico|tiff?))["']/gi;
+	let match;
+	while ((match = quotedRegex.exec(text)) !== null) {
+		candidates.push(match[1]);
+	}
+
+	// Match unquoted paths — look for path-like strings ending in image extensions.
+	// Paths may contain spaces (common on macOS) and may be embedded in text.
+	// Strategy: find all occurrences of image extensions, then find the path start.
+	const extRegex = /\.(?:png|jpe?g|gif|webp|bmp|svg|ico|tiff?)/gi;
+	while ((match = extRegex.exec(text)) !== null) {
+		const extEnd = match.index + match[0].length;
+		
+		// Find the last / before the extension that starts a path
+		let pathStart = -1;
+		for (let i = match.index - 1; i >= 0; i--) {
+			if (text[i] === '/') {
+				// Check if this / is at the start of a path (preceded by space, newline, or start of string)
+				if (i === 0 || text[i - 1] === ' ' || text[i - 1] === '\n' || text[i - 1] === '\t' || text[i - 1] === '"' || text[i - 1] === "'") {
+					pathStart = i;
+					break;
+				}
+			}
+		}
+		
+		if (pathStart >= 0) {
+			const candidate = text.substring(pathStart, extEnd);
+			candidates.push(candidate);
+		}
+	}
+
+	// Deduplicate and try to read each file directly (skip access check)
+	const unique = [...new Set(candidates)];
+	const valid: string[] = [];
+	for (const p of unique) {
+		const resolved = resolve(p);
+		try {
+			await readFile(resolved);
+			valid.push(resolved);
+		} catch {
+			// File not readable — skip
+		}
+	}
+
+	return valid;
+}
+
+/**
+ * Read an image file and return ImageContent.
+ * Uses file path + size + mtime as cache key (avoids hashing large files).
+ */
+async function readImageFile(filePath: string): Promise<{ image: ImageContent; cacheKey: string } | undefined> {
+	try {
+		const stat = await statFile(filePath);
+		const data = await readFile(filePath);
+		const mimeType = mimeFromPath(filePath) ?? "image/png";
+		const cacheKey = `file:${filePath}:${stat.size}:${stat.mtimeMs}`;
+		return {
+			image: { type: "image", data: data.toString("base64"), mimeType },
+			cacheKey,
+		};
+	} catch {
+		return undefined;
+	}
+}
+
 export default function (pi: ExtensionAPI): void {
 	// --- session lifecycle ---
 
 	pi.on("session_start", async (_event, ctx) => {
 		cache.clear();
 		notifiedNoVision = false;
-		overrideModelId = loadOverride(ctx);
+
+		// Load override from config file first (persists across sessions),
+		// then fall back to session entries for backward compat.
+		const configId = await loadConfig();
+		if (configId) {
+			overrideModelId = configId;
+			overrideSource = "config";
+		} else {
+			overrideModelId = loadOverride(ctx);
+			overrideSource = overrideModelId ? "session" : undefined;
+		}
+
 		currentSessionDir = savedImagesDir(ctx.sessionManager.getSessionId());
 	});
 
@@ -178,7 +365,29 @@ export default function (pi: ExtensionAPI): void {
 	// --- auto-describe attached images ---
 
 	pi.on("input", async (event, ctx) => {
-		if (!event.images || event.images.length === 0) return { action: "continue" as const };
+		// Collect images from both event.images (base64-embedded) and
+		// file paths in event.text (pi's paste-as-path behavior).
+		const images: { image: ImageContent; cacheKey: string }[] = [];
+
+		// 1. Base64-embedded images
+		if (event.images) {
+			for (const image of event.images) {
+				const hash = hashData(image.data);
+				images.push({ image, cacheKey: `hash:${hash}` });
+			}
+		}
+
+		// 2. File paths in message text (pi saves pasted images to temp files)
+		const imagePaths = await findImagePaths(event.text);
+		for (const filePath of imagePaths) {
+			const result = await readImageFile(filePath);
+			if (result) {
+				images.push(result);
+			}
+		}
+
+		if (images.length === 0) return { action: "continue" as const };
+		if (ctx.signal?.aborted) return { action: "continue" as const };
 		const active = ctx.model;
 		if (!active || active.input.includes("image")) return { action: "continue" as const };
 
@@ -198,12 +407,12 @@ export default function (pi: ExtensionAPI): void {
 		await mkdir(dir, { recursive: true });
 
 		const blocks: string[] = [];
-		for (const image of event.images) {
-			const hash = hashData(image.data);
-			const fileName = `${hash}${extName(image.mimeType)}`;
+		for (const { image, cacheKey } of images) {
+			const ext = extName(image.mimeType);
+			const fileName = `${cacheKey.replace(/[:/\\]/g, "_")}${ext}`;
 			const filePath = join(dir, fileName);
 
-			let description = cache.get(hash);
+			let description = cache.get(cacheKey);
 			if (description === undefined) {
 				try {
 					// persist the raw image for read_image follow-ups
@@ -213,17 +422,27 @@ export default function (pi: ExtensionAPI): void {
 						console.warn(`[vision-bridge] failed to save ${filePath}: ${errorMessage(error)}`);
 					}
 					description = await describeImage(ctx, visionModel, image, undefined);
-					cache.set(hash, description);
+					cache.set(cacheKey, description);
 				} catch (error) {
-					description = `[Vision bridge: ${visionModel.provider}/${visionModel.id} failed to read this image: ${errorMessage(error)}]`;
+					ctx.ui.notify(
+						`Vision bridge: ${visionModel.provider}/${visionModel.id} failed to read image: ${errorMessage(error)}`,
+						"error",
+					);
+					description = `[Vision bridge: ${visionModel.provider}/${visionModel.id} failed to read this image: ${errorMessage(error)}. The image was not processed.]`;
 				}
 			}
 			blocks.push(`--- Image ${fileName} (saved at ${filePath}) ---\n${description}`);
 		}
 
+		// Clean the text: remove the image file paths that pi inserted
+		let cleanText = event.text;
+		for (const path of imagePaths) {
+			cleanText = cleanText.replace(path, "").trim();
+		}
+
 		const text =
-			`${event.text}\n\n[Vision bridge]\n${blocks.join("\n\n")}\n\n` +
-			`The user attached ${event.images.length} image(s). The active model (${active.provider}/${active.id}) ` +
+			`${cleanText}\n\n[Vision bridge]\n${blocks.join("\n\n")}\n\n` +
+			`The user attached ${images.length} image(s). The active model (${active.provider}/${active.id}) ` +
 			`cannot receive images, so the vision model (${visionModel.provider}/${visionModel.id}) described them above. ` +
 			`Use the read_image tool with path=<saved path> and an optional question to ask for details the description missed.`;
 
@@ -314,26 +533,52 @@ export default function (pi: ExtensionAPI): void {
 	// --- commands ---
 
 	pi.registerCommand("vision-bridge-model", {
-		description: "Set the vision model used by the vision bridge (provider/model-id)",
+		description: "Set the vision model used by the vision bridge (provider/model-id or model-id)",
 		handler: async (args, ctx) => {
 			const id = args?.trim();
 			if (!id) {
-				ctx.ui.notify("Usage: /vision-bridge-model <provider/model-id>", "error");
+				// Clear override
+				overrideModelId = undefined;
+				overrideSource = undefined;
+				await deleteConfig();
+				ctx.ui.notify("Vision bridge model override cleared. Using auto-pick.", "info");
 				return;
 			}
-			const [provider, modelId] = id.split("/");
-			const model = provider && modelId ? ctx.modelRegistry.find(provider, modelId) : undefined;
+
+			let model: Model<any> | undefined;
+			let resolvedId: string = id;
+
+			if (id.includes("/")) {
+				// Explicit provider/model-id format
+				const [provider, modelId] = id.split("/");
+				model = provider && modelId ? ctx.modelRegistry.find(provider, modelId) : undefined;
+			} else {
+				// Model ID only — search available models
+				const available = ctx.modelRegistry.getAvailable();
+				const matches = available.filter((m) => m.id === id);
+				if (matches.length === 1) {
+					model = matches[0];
+					resolvedId = `${model.provider}/${model.id}`;
+				} else if (matches.length > 1) {
+					const list = matches.map((m) => `${m.provider}/${m.id}`).join(", ");
+					ctx.ui.notify(`Vision bridge: multiple models match "${id}". Use provider/model-id: ${list}`, "error");
+					return;
+				}
+			}
+
 			if (!model) {
 				ctx.ui.notify(`Vision bridge: unknown model "${id}"`, "error");
 				return;
 			}
 			if (!model.input.includes("image")) {
-				ctx.ui.notify(`Vision bridge: model "${id}" does not accept images`, "error");
+				ctx.ui.notify(`Vision bridge: model "${resolvedId}" does not accept images`, "error");
 				return;
 			}
-			overrideModelId = id;
-			pi.appendEntry<BridgeState>(BRIDGE_ENTRY, { overrideModelId: id });
-			ctx.ui.notify(`Vision bridge model set to ${id}`, "info");
+			overrideModelId = resolvedId;
+			overrideSource = "config";
+			await saveConfig({ overrideModelId: resolvedId });
+			pi.appendEntry<BridgeState>(BRIDGE_ENTRY, { overrideModelId: resolvedId });
+			ctx.ui.notify(`Vision bridge model set to ${resolvedId} (persisted to ${CONFIG_PATH})`, "info");
 		},
 	});
 
@@ -346,11 +591,153 @@ export default function (pi: ExtensionAPI): void {
 				`Active model: ${active ? `${active.provider}/${active.id}` : "none"}`,
 				`Vision capability: ${active ? (active.input.includes("image") ? "yes" : "no") : "n/a"}`,
 				`Bridge override: ${overrideModelId ?? "none (auto)"}`,
+				`Override source: ${overrideSource === "config" ? `config file (${CONFIG_PATH})` : overrideSource === "session" ? "session entries" : "n/a"}`,
 				`Resolved bridge model: ${visionModel ? `${visionModel.provider}/${visionModel.id}` : "none"}`,
 				`Cache entries: ${cache.size}`,
 				`Session dir: ${savedImagesDir(ctx.sessionManager.getSessionId())}`,
 			];
 			ctx.ui.notify(lines.join("\n"), "info");
+		},
+	});
+
+	// --- keyboard shortcut: ctrl+v / alt+v for clipboard image paste ---
+	// Intercepts the default paste shortcut to handle images directly from clipboard.
+	// Falls back to text paste when no image is found.
+
+	pi.registerShortcut("ctrl+v", {
+		description: "Paste image from clipboard via vision bridge (text fallback)",
+		handler: async (ctx) => {
+			const active = ctx.model;
+			const visionModel = resolveVisionModel(ctx);
+
+			// Try to read image from clipboard
+			const imageData = await readClipboardImage(async (cmd, args) => {
+				const result = await ctx.exec(cmd, args, { timeout: 5000 });
+				return { stdout: result.stdout, stderr: result.stderr };
+			});
+
+			if (imageData) {
+				// Image found in clipboard
+				if (!active || active.input.includes("image")) {
+					// Model already supports images, fall through to normal paste
+					// by reading clipboard text and pasting it
+					try {
+						const textResult = await ctx.exec("pbpaste", [], { timeout: 2000 });
+						if (textResult.stdout) ctx.ui.pasteToEditor(textResult.stdout);
+					} catch {
+						// No text in clipboard, that's fine
+					}
+					return;
+				}
+
+				if (!visionModel) {
+					ctx.ui.notify("Vision bridge: no vision-capable model available.", "error");
+					return;
+				}
+
+				// Save to session temp dir
+				const dir = savedImagesDir(ctx.sessionManager.getSessionId());
+				await mkdir(dir, { recursive: true });
+				const hash = hashData(imageData.data);
+				const ext = extName(imageData.mimeType);
+				const fileName = `${hash}${ext}`;
+				const filePath = join(dir, fileName);
+
+				let description = cache.get(`hash:${hash}`);
+				if (description === undefined) {
+					try {
+						await writeFile(filePath, Buffer.from(imageData.data, "base64"));
+						description = await describeImage(ctx, visionModel, imageData, undefined);
+						cache.set(`hash:${hash}`, description);
+					} catch (error) {
+						ctx.ui.notify(`Vision bridge failed: ${errorMessage(error)}`, "error");
+						return;
+					}
+				}
+
+				// Inject the description into the editor
+				const message = `[Vision bridge] Image from clipboard (saved at ${filePath}):
+${description}
+
+Use the read_image tool with path=${filePath} for follow-up questions.`;
+				pi.sendUserMessage(message);
+			} else {
+				// No image in clipboard, fall back to text paste
+				try {
+					const textResult = await ctx.exec("pbpaste", [], { timeout: 2000 });
+					if (textResult.stdout) ctx.ui.pasteToEditor(textResult.stdout);
+				} catch {
+					// No text in clipboard either, that's fine
+				}
+			}
+		},
+	});
+
+	pi.registerShortcut("alt+v", {
+		description: "Paste image from clipboard via vision bridge (text fallback)",
+		handler: async (ctx) => {
+			const active = ctx.model;
+			const visionModel = resolveVisionModel(ctx);
+
+			// Try to read image from clipboard
+			const imageData = await readClipboardImage(async (cmd, args) => {
+				const result = await ctx.exec(cmd, args, { timeout: 5000 });
+				return { stdout: result.stdout, stderr: result.stderr };
+			});
+
+			if (imageData) {
+				// Image found in clipboard
+				if (!active || active.input.includes("image")) {
+					// Model already supports images, fall through to normal paste
+					try {
+						const textResult = await ctx.exec("pbpaste", [], { timeout: 2000 });
+						if (textResult.stdout) ctx.ui.pasteToEditor(textResult.stdout);
+					} catch {
+						// No text in clipboard, that's fine
+					}
+					return;
+				}
+
+				if (!visionModel) {
+					ctx.ui.notify("Vision bridge: no vision-capable model available.", "error");
+					return;
+				}
+
+				// Save to session temp dir
+				const dir = savedImagesDir(ctx.sessionManager.getSessionId());
+				await mkdir(dir, { recursive: true });
+				const hash = hashData(imageData.data);
+				const ext = extName(imageData.mimeType);
+				const fileName = `${hash}${ext}`;
+				const filePath = join(dir, fileName);
+
+				let description = cache.get(`hash:${hash}`);
+				if (description === undefined) {
+					try {
+						await writeFile(filePath, Buffer.from(imageData.data, "base64"));
+						description = await describeImage(ctx, visionModel, imageData, undefined);
+						cache.set(`hash:${hash}`, description);
+					} catch (error) {
+						ctx.ui.notify(`Vision bridge failed: ${errorMessage(error)}`, "error");
+						return;
+					}
+				}
+
+				// Inject the description into the editor
+				const message = `[Vision bridge] Image from clipboard (saved at ${filePath}):
+${description}
+
+Use the read_image tool with path=${filePath} for follow-up questions.`;
+				pi.sendUserMessage(message);
+			} else {
+				// No image in clipboard, fall back to text paste
+				try {
+					const textResult = await ctx.exec("pbpaste", [], { timeout: 2000 });
+					if (textResult.stdout) ctx.ui.pasteToEditor(textResult.stdout);
+				} catch {
+					// No text in clipboard either, that's fine
+				}
+			}
 		},
 	});
 }
