@@ -11,3 +11,4 @@ agent/extensions/deepseek-cache/
 agent/npm/
 
 __pycache__/
+agent/vision-bridge-config.json
