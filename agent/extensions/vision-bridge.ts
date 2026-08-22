@@ -24,11 +24,9 @@
  * Image detection supports two modes:
  *   - Base64-embedded images in event.images (direct attachment)
  *   - File paths in event.text (pi's paste-as-path behavior)
- *   - Clipboard paste via ctrl+v / alt+v (reads image from clipboard directly)
  *
- * The extension intercepts ctrl+v and alt+v to read images directly from the
- * clipboard (like Codex CLI), bypassing pi's sandboxed paste handler. When no
- * image is found, it falls back to normal text paste.
+ * Clipboard pastes use pi's built-in app.clipboard.pasteImage (ctrl+v), which
+ * saves the image and inserts its path; the input handler bridges it from there.
  *
  * Commands:
  *   /vision-bridge-model <provider/model-id>   set the bridge vision model
@@ -36,10 +34,6 @@
  *
  * Tool:
  *   read_image(path, question?)                ask the vision model about a saved image
- *
- * Keyboard shortcuts:
- *   ctrl+v   paste image from clipboard via vision bridge (text fallback)
- *   alt+v    paste image from clipboard via vision bridge (text fallback)
  */
 
 import type {
@@ -216,47 +210,6 @@ async function deleteConfig(): Promise<void> {
 		await rm(CONFIG_PATH, { force: true });
 	} catch (error) {
 		console.warn(`[vision-bridge] failed to delete config: ${errorMessage(error)}`);
-	}
-}
-
-/**
- * Read image from clipboard using platform-specific commands.
- * Returns { data: base64, mimeType } or undefined if no image.
- */
-async function readClipboardImage(exec: (cmd: string, args: string[], opts?: any) => Promise<{ stdout: string; stderr: string }>): Promise<{ data: string; mimeType: string } | undefined> {
-	try {
-		// macOS: use osascript to check for and read clipboard image
-		const checkResult = await exec("osascript", [
-			"-e",
-			`try
-				set img to the clipboard as «class PNGf»
-				return length of img
-			on error
-				return "0"
-			end try`,
-		]);
-		
-		if (checkResult.stdout.trim() === "0") return undefined;
-		
-		// Read the actual image data
-		const readResult = await exec("osascript", [
-			"-e",
-			`set img to the clipboard as «class PNGf»
-			return img`,
-		]);
-		
-		// The output is hex-encoded PNG data wrapped in «»
-		const hexMatch = readResult.stdout.match(/«data PNGf([0-9A-Fa-f]+)»/);
-		if (!hexMatch) return undefined;
-		
-		const hex = hexMatch[1];
-		const bytes = Buffer.from(hex, "hex");
-		return {
-			data: bytes.toString("base64"),
-			mimeType: "image/png",
-		};
-	} catch {
-		return undefined;
 	}
 }
 
@@ -597,147 +550,6 @@ export default function (pi: ExtensionAPI): void {
 				`Session dir: ${savedImagesDir(ctx.sessionManager.getSessionId())}`,
 			];
 			ctx.ui.notify(lines.join("\n"), "info");
-		},
-	});
-
-	// --- keyboard shortcut: ctrl+v / alt+v for clipboard image paste ---
-	// Intercepts the default paste shortcut to handle images directly from clipboard.
-	// Falls back to text paste when no image is found.
-
-	pi.registerShortcut("ctrl+v", {
-		description: "Paste image from clipboard via vision bridge (text fallback)",
-		handler: async (ctx) => {
-			const active = ctx.model;
-			const visionModel = resolveVisionModel(ctx);
-
-			// Try to read image from clipboard
-			const imageData = await readClipboardImage(async (cmd, args) => {
-				const result = await ctx.exec(cmd, args, { timeout: 5000 });
-				return { stdout: result.stdout, stderr: result.stderr };
-			});
-
-			if (imageData) {
-				// Image found in clipboard
-				if (!active || active.input.includes("image")) {
-					// Model already supports images, fall through to normal paste
-					// by reading clipboard text and pasting it
-					try {
-						const textResult = await ctx.exec("pbpaste", [], { timeout: 2000 });
-						if (textResult.stdout) ctx.ui.pasteToEditor(textResult.stdout);
-					} catch {
-						// No text in clipboard, that's fine
-					}
-					return;
-				}
-
-				if (!visionModel) {
-					ctx.ui.notify("Vision bridge: no vision-capable model available.", "error");
-					return;
-				}
-
-				// Save to session temp dir
-				const dir = savedImagesDir(ctx.sessionManager.getSessionId());
-				await mkdir(dir, { recursive: true });
-				const hash = hashData(imageData.data);
-				const ext = extName(imageData.mimeType);
-				const fileName = `${hash}${ext}`;
-				const filePath = join(dir, fileName);
-
-				let description = cache.get(`hash:${hash}`);
-				if (description === undefined) {
-					try {
-						await writeFile(filePath, Buffer.from(imageData.data, "base64"));
-						description = await describeImage(ctx, visionModel, imageData, undefined);
-						cache.set(`hash:${hash}`, description);
-					} catch (error) {
-						ctx.ui.notify(`Vision bridge failed: ${errorMessage(error)}`, "error");
-						return;
-					}
-				}
-
-				// Inject the description into the editor
-				const message = `[Vision bridge] Image from clipboard (saved at ${filePath}):
-${description}
-
-Use the read_image tool with path=${filePath} for follow-up questions.`;
-				pi.sendUserMessage(message);
-			} else {
-				// No image in clipboard, fall back to text paste
-				try {
-					const textResult = await ctx.exec("pbpaste", [], { timeout: 2000 });
-					if (textResult.stdout) ctx.ui.pasteToEditor(textResult.stdout);
-				} catch {
-					// No text in clipboard either, that's fine
-				}
-			}
-		},
-	});
-
-	pi.registerShortcut("alt+v", {
-		description: "Paste image from clipboard via vision bridge (text fallback)",
-		handler: async (ctx) => {
-			const active = ctx.model;
-			const visionModel = resolveVisionModel(ctx);
-
-			// Try to read image from clipboard
-			const imageData = await readClipboardImage(async (cmd, args) => {
-				const result = await ctx.exec(cmd, args, { timeout: 5000 });
-				return { stdout: result.stdout, stderr: result.stderr };
-			});
-
-			if (imageData) {
-				// Image found in clipboard
-				if (!active || active.input.includes("image")) {
-					// Model already supports images, fall through to normal paste
-					try {
-						const textResult = await ctx.exec("pbpaste", [], { timeout: 2000 });
-						if (textResult.stdout) ctx.ui.pasteToEditor(textResult.stdout);
-					} catch {
-						// No text in clipboard, that's fine
-					}
-					return;
-				}
-
-				if (!visionModel) {
-					ctx.ui.notify("Vision bridge: no vision-capable model available.", "error");
-					return;
-				}
-
-				// Save to session temp dir
-				const dir = savedImagesDir(ctx.sessionManager.getSessionId());
-				await mkdir(dir, { recursive: true });
-				const hash = hashData(imageData.data);
-				const ext = extName(imageData.mimeType);
-				const fileName = `${hash}${ext}`;
-				const filePath = join(dir, fileName);
-
-				let description = cache.get(`hash:${hash}`);
-				if (description === undefined) {
-					try {
-						await writeFile(filePath, Buffer.from(imageData.data, "base64"));
-						description = await describeImage(ctx, visionModel, imageData, undefined);
-						cache.set(`hash:${hash}`, description);
-					} catch (error) {
-						ctx.ui.notify(`Vision bridge failed: ${errorMessage(error)}`, "error");
-						return;
-					}
-				}
-
-				// Inject the description into the editor
-				const message = `[Vision bridge] Image from clipboard (saved at ${filePath}):
-${description}
-
-Use the read_image tool with path=${filePath} for follow-up questions.`;
-				pi.sendUserMessage(message);
-			} else {
-				// No image in clipboard, fall back to text paste
-				try {
-					const textResult = await ctx.exec("pbpaste", [], { timeout: 2000 });
-					if (textResult.stdout) ctx.ui.pasteToEditor(textResult.stdout);
-				} catch {
-					// No text in clipboard either, that's fine
-				}
-			}
 		},
 	});
 }
