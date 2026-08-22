@@ -3,7 +3,7 @@ import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, wrapT
 import { Type } from "typebox";
 
 interface ClarifyOption {
-	value: string;
+	value?: string;
 	label: string;
 	description?: string;
 	recommended?: boolean;
@@ -21,9 +21,16 @@ interface ClarifyQuestion {
 	allowDelegate?: boolean;
 }
 
-interface RenderOption extends ClarifyOption {
+interface RenderOption extends ResolvedOption {
 	synthetic?: "custom" | "deeper" | "delegate";
 }
+
+type ResolvedOption = ClarifyOption & { value: string };
+type ResolvedQuestion = Omit<ClarifyQuestion, "options" | "label" | "why"> & {
+	label: string;
+	why?: string;
+	options: ResolvedOption[];
+};
 
 interface ClarifyAnswer {
 	id: string;
@@ -40,7 +47,7 @@ interface ClarifyResult {
 }
 
 const OptionSchema = Type.Object({
-	value: Type.String({ description: "Stable option value returned when selected" }),
+	value: Type.Optional(Type.String({ description: "Stable option value returned when selected. Defaults to label when omitted" })),
 	label: Type.String({ description: "Human-readable option text" }),
 	description: Type.Optional(Type.String({ description: "Short tradeoff/explanation" })),
 	recommended: Type.Optional(Type.Boolean({ description: "Whether this option is recommended/preselected" })),
@@ -51,7 +58,7 @@ const QuestionSchema = Type.Object({
 	label: Type.Optional(Type.String({ description: "Short label for progress display" })),
 	prompt: Type.String({ description: "Question to ask" }),
 	why: Type.Optional(Type.String({ description: "Why this matters" })),
-	options: Type.Array(OptionSchema, { description: "Concrete answer options. Put recommended option first when possible." }),
+	options: Type.Array(OptionSchema, { description: "Concrete answer options. Put recommended option first when possible. Option value defaults to label when omitted." }),
 	allowMultiple: Type.Optional(Type.Boolean({ description: "Allow choosing multiple options with Space" })),
 	allowCustom: Type.Optional(Type.Boolean({ description: "Allow authored answer" })),
 	allowDigDeeper: Type.Optional(Type.Boolean({ description: "Allow user to request deeper follow-up" })),
@@ -63,13 +70,13 @@ const ParamsSchema = Type.Object({
 	questions: Type.Array(QuestionSchema, { description: "Clarification questions to ask" }),
 });
 
-function normalizeQuestions(raw: ClarifyQuestion[]): Required<Omit<ClarifyQuestion, "why" | "label"> & { why?: string; label: string }>[] {
+function normalizeQuestions(raw: ClarifyQuestion[]): ResolvedQuestion[] {
 	return raw.map((q, i) => ({
 		id: q.id,
 		label: q.label || `Q${i + 1}`,
 		prompt: q.prompt,
 		why: q.why,
-		options: q.options || [],
+		options: (q.options || []).map((o) => ({ ...o, value: o.value ?? o.label })),
 		allowMultiple: q.allowMultiple === true,
 		allowCustom: q.allowCustom !== false,
 		allowDigDeeper: q.allowDigDeeper !== false,
