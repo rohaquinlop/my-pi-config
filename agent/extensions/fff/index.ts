@@ -33,47 +33,86 @@ import type {
 } from "@ff-labs/fff-node";
 import { FileFinder } from "@ff-labs/fff-node";
 import { Type } from "@sinclair/typebox";
+import fs from "node:fs";
 import path from "node:path";
+
+// ── Path resolution helpers ────────────────────────────────────────────
+
+interface ResolvedConstraint {
+  root: string;
+  constraint: string | null;
+}
+
+/** Walk up from target until an existing directory is found (file → dirname). */
+function deepestExistingAncestor(target: string): string {
+  let dir = path.resolve(target);
+  for (;;) {
+    try {
+      if (fs.statSync(dir).isDirectory()) return dir;
+    } catch {
+      // fall through to parent
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return dir; // filesystem root
+    dir = parent;
+  }
+}
 
 // ── Query building helpers ──────────────────────────────────────────────
 
 function normalizePathConstraint(
   pathConstraint: string,
   cwd = process.cwd(),
-): string | null {
+): ResolvedConstraint | null {
   let trimmed = pathConstraint.trim();
-  if (!trimmed) return trimmed;
+  if (!trimmed) return null;
+
+  let root = cwd;
 
   if (path.isAbsolute(trimmed)) {
     const relative = path.relative(cwd, trimmed).replaceAll(path.sep, "/");
     if (relative === "") return null;
-    if (relative.startsWith("../") || relative === ".." || path.isAbsolute(relative)) {
-      throw new Error(
-        `Path constraint must be relative to the workspace: ${pathConstraint}`,
-      );
+    if (relative.startsWith("../") || relative === "..") {
+      // Outside the workspace: index the deepest existing ancestor.
+      const target = path.resolve(trimmed);
+      root = deepestExistingAncestor(target);
+      trimmed = path.relative(root, target).replaceAll(path.sep, "/");
+      if (trimmed === "" || trimmed === ".") return { root, constraint: null };
+    } else {
+      trimmed = relative;
     }
-    trimmed = relative;
+  } else {
+    // Relative constraint: detect workspace escapes (../) and treat them as external roots.
+    const target = path.resolve(cwd, trimmed);
+    const relFromCwd = path.relative(cwd, target).replaceAll(path.sep, "/");
+    if (relFromCwd.startsWith("../") || relFromCwd === "..") {
+      root = deepestExistingAncestor(target);
+      trimmed = path.relative(root, target).replaceAll(path.sep, "/");
+      if (trimmed === "" || trimmed === ".") return { root, constraint: null };
+    }
   }
 
-  if (trimmed === "." || trimmed === "./") return null;
+  if (trimmed === "." || trimmed === "./") return { root, constraint: null };
   if (trimmed.startsWith("./")) trimmed = trimmed.slice(2);
 
   const recursiveDir = trimmed.match(/^(.*)\/\*\*(?:\/\*)?$/);
   if (recursiveDir) {
     const dir = recursiveDir[1];
-    if (dir && !/[*?[{]/.test(dir)) return `${dir}/`;
+    if (dir && !/[*?[{]/.test(dir)) {
+      return { root, constraint: `${dir}/` };
+    }
   }
 
-  if (trimmed.startsWith("/") || trimmed.endsWith("/")) return trimmed;
-  if (/[*?[{]/.test(trimmed)) return trimmed;
+  if (trimmed.startsWith("/") || trimmed.endsWith("/")) return { root, constraint: trimmed };
+  if (/[*?[{]/.test(trimmed)) return { root, constraint: trimmed };
   const lastSegment = trimmed.split("/").pop() ?? "";
-  if (/\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(lastSegment)) return trimmed;
-  return `${trimmed}/`;
+  if (/\.[a-zA-Z][a-zA-Z0-9]{0,9}$/.test(lastSegment)) return { root, constraint: trimmed };
+  return { root, constraint: `${trimmed}/` };
 }
 
 function normalizeExcludes(
   exclude: string | string[] | undefined,
-  cwd = process.cwd(),
+  root: string,
 ): string[] {
   if (!exclude) return [];
   const list = Array.isArray(exclude) ? exclude : [exclude];
@@ -85,11 +124,44 @@ function normalizeExcludes(
       .filter(Boolean);
     for (const p of parts) {
       const stripped = p.startsWith("!") ? p.slice(1) : p;
-      const normalized = normalizePathConstraint(stripped, cwd);
-      if (normalized) out.push(`!${normalized}`);
+      const resolved = path.isAbsolute(stripped) ? stripped : path.resolve(root, stripped);
+      if (path.relative(root, resolved).startsWith("..")) continue; // escapes root — skip
+      const normalized = normalizePathConstraint(stripped, root);
+      if (normalized?.constraint) out.push(`!${normalized.constraint}`);
     }
   }
   return out;
+}
+
+interface BuiltQuery {
+  query: string;
+  root: string;
+}
+
+/**
+ * Resolve the search root from a multi-grep filter string. If the first token
+ * is an absolute path (or a relative path escaping the workspace), that token
+ * designates the external root and is stripped from the filter passed to the
+ * engine. Otherwise the filter is passed through untouched (workspace root).
+ */
+function resolveRootFromFilter(
+  filter: string | undefined,
+  cwd: string,
+): { root: string; filter: string | undefined } {
+  if (!filter) return { root: cwd, filter: undefined };
+  const trimmed = filter.trim();
+  const tokens = trimmed.split(/\s+/);
+  const first = tokens[0];
+  if (!first) return { root: cwd, filter: undefined };
+  const target = path.isAbsolute(first) ? path.resolve(first) : path.resolve(cwd, first);
+  const relFromCwd = path.relative(cwd, target);
+  const escapes = relFromCwd === ".." || relFromCwd.startsWith("../");
+  if (escapes) {
+    const root = deepestExistingAncestor(target);
+    const rest = tokens.slice(1).join(" ");
+    return { root, filter: rest || undefined };
+  }
+  return { root: cwd, filter: trimmed };
 }
 
 function buildQuery(
@@ -97,15 +169,19 @@ function buildQuery(
   pattern: string,
   exclude?: string | string[],
   cwd = process.cwd(),
-): string {
+): BuiltQuery {
+  let root = cwd;
   const parts: string[] = [];
   if (pathConstraint) {
-    const normalized = normalizePathConstraint(pathConstraint, cwd);
-    if (normalized) parts.push(normalized);
+    const resolved = normalizePathConstraint(pathConstraint, cwd);
+    if (resolved) {
+      root = resolved.root;
+      if (resolved.constraint) parts.push(resolved.constraint);
+    }
   }
-  parts.push(...normalizeExcludes(exclude, cwd));
+  parts.push(...normalizeExcludes(exclude, root));
   parts.push(pattern);
-  return parts.join(" ");
+  return { query: parts.join(" "), root };
 }
 
 // ── Constants ──────────────────────────────────────────────────────────
@@ -119,12 +195,17 @@ const MENTION_MAX_RESULTS = 20;
 
 // ── Cursor store — bounded Map for pagination cursors ──────────────────
 
-const cursorCache = new Map<string, GrepCursor>();
+interface StoredGrepCursor {
+  cursor: GrepCursor;
+  root: string;
+}
+
+const cursorCache = new Map<string, StoredGrepCursor>();
 let cursorCounter = 0;
 
-function storeCursor(cursor: GrepCursor): string {
+function storeCursor(cursor: GrepCursor, root: string): string {
   const id = `fff_c${++cursorCounter}`;
-  cursorCache.set(id, cursor);
+  cursorCache.set(id, { cursor, root });
   if (cursorCache.size > 200) {
     const first = cursorCache.keys().next().value;
     if (first) cursorCache.delete(first);
@@ -132,7 +213,7 @@ function storeCursor(cursor: GrepCursor): string {
   return id;
 }
 
-function getCursor(id: string): GrepCursor | undefined {
+function getCursor(id: string): StoredGrepCursor | undefined {
   return cursorCache.get(id);
 }
 
@@ -141,6 +222,7 @@ interface FindCursor {
   pattern: string;
   pageSize: number;
   nextPageIndex: number;
+  root: string;
 }
 
 const findCursorCache = new Map<string, FindCursor>();
@@ -185,17 +267,18 @@ function fffFileAnnotation(item: {
   return "";
 }
 
-function formatGrepOutput(result: GrepResult): string {
+function formatGrepOutput(result: GrepResult, pathPrefix = ""): string {
   if (result.items.length === 0) return "No matches found";
 
   const lines: string[] = [];
   let currentFile = "";
 
   for (const match of result.items) {
-    if (match.relativePath !== currentFile) {
+    const filePath = pathPrefix + match.relativePath;
+    if (filePath !== currentFile) {
       if (lines.length > 0) lines.push("");
-      currentFile = match.relativePath;
-      lines.push(`${currentFile}${fffFileAnnotation(match)}`);
+      currentFile = filePath;
+      lines.push(`${filePath}${fffFileAnnotation(match)}`);
     }
 
     match.contextBefore?.forEach((line: string, i: number) => {
@@ -231,6 +314,7 @@ function formatFindOutput(
   result: SearchResult,
   limit: number,
   pattern: string,
+  pathPrefix = "",
 ): FormattedFind {
   if (result.items.length === 0) {
     return { output: "No files found matching pattern", weak: false, shownCount: 0 };
@@ -243,7 +327,7 @@ function formatFindOutput(
 
   return {
     output: shown
-      .map((item) => `${item.relativePath}${fffFileAnnotation(item)}`)
+      .map((item) => `${pathPrefix}${item.relativePath}${fffFileAnnotation(item)}`)
       .join("\n"),
     weak,
     shownCount: shown.length,
@@ -318,6 +402,14 @@ export default function fffExtension(pi: ExtensionAPI) {
     "FFF_ENABLE_ROOT_SCAN",
   );
 
+  const ALT_LRU_MAX = 3;
+  const ALT_IDLE_TTL_MS = 10 * 60 * 1000;
+  interface AltFinderEntry {
+    finder: FileFinder;
+    lastUsed: number;
+  }
+  const altFinders = new Map<string, AltFinderEntry>();
+
   async function ensureFinder(cwd: string): Promise<FileFinder> {
     if (finder && !finder.isDestroyed && finderCwd === cwd)
       return Promise.resolve(finder);
@@ -353,12 +445,68 @@ export default function fffExtension(pi: ExtensionAPI) {
     return finderPromise;
   }
 
+  /** Get a finder for an arbitrary root: session cwd uses the watcher-enabled finder; other roots get a cached, un-watched finder. */
+  async function getFinderForRoot(root: string): Promise<FileFinder> {
+    if (root === activeCwd) return ensureFinder(root);
+
+    const now = Date.now();
+    // Idle TTL sweep
+    for (const [r, entry] of altFinders) {
+      if (now - entry.lastUsed > ALT_IDLE_TTL_MS) {
+        if (!entry.finder.isDestroyed) entry.finder.destroy();
+        altFinders.delete(r);
+      }
+    }
+
+    const existing = altFinders.get(root);
+    if (existing && !existing.finder.isDestroyed) {
+      existing.lastUsed = now;
+      return existing.finder;
+    }
+
+    const result = FileFinder.create({
+      basePath: root,
+      frecencyDbPath,
+      historyDbPath,
+      aiMode: true,
+      enableHomeDirScanning: true,
+      enableFsRootScanning,
+      disableWatch: true,
+    });
+
+    if (!result.ok)
+      throw new Error(
+        `Failed to create FFF file finder for ${root}: ${result.error}`,
+      );
+
+    const altFinder = result.value;
+    await altFinder.waitForScan(15000);
+
+    // LRU eviction
+    if (altFinders.size >= ALT_LRU_MAX) {
+      const lru = [...altFinders.entries()].sort(
+        (a, b) => a[1].lastUsed - b[1].lastUsed,
+      )[0];
+      if (lru) {
+        if (!lru[1].finder.isDestroyed) lru[1].finder.destroy();
+        altFinders.delete(lru[0]);
+      }
+    }
+
+    altFinders.set(root, { finder: altFinder, lastUsed: Date.now() });
+    return altFinder;
+  }
+
   function destroyFinder() {
     if (finder && !finder.isDestroyed) {
       finder.destroy();
       finder = null;
       finderCwd = null;
     }
+    for (const [, entry] of altFinders) {
+      if (!entry.finder.isDestroyed) entry.finder.destroy();
+    }
+    altFinders.clear();
   }
 
   async function getMentionItems(
@@ -530,7 +678,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     path: Type.Optional(
       Type.String({
         description:
-          "Repo-relative path constraint. Directory prefix (src/ or src/foo/), bare filename with extension (main.rs), or glob (*.ts, src/**/*.cc, {src,lib}/**). Applied to the full repo-relative path.",
+          "Path constraint relative to the workspace: directory prefix (src/ or src/foo/), bare filename with extension (main.rs), or glob (*.ts, src/**/*.cc, {src,lib}/**). Absolute paths outside the workspace are supported: the tool indexes that directory and returns absolute paths.",
       }),
     ),
     exclude: Type.Optional(
@@ -559,22 +707,26 @@ export default function fffExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "ffgrep",
     label: "ffgrep",
-    description: `Grep file contents. Smart-case, auto-detects regex vs literal, git-aware. Results are ranked by frecency (most-accessed files first); matches within a file stay in source order. Default limit ${DEFAULT_GREP_LIMIT}.`,
+    description: `Grep file contents. Smart-case, auto-detects regex vs literal, git-aware. Results are ranked by frecency (most-accessed files first); matches within a file stay in source order. Absolute paths outside the workspace are supported and return absolute paths (first such query builds a temporary index). Default limit ${DEFAULT_GREP_LIMIT}.`,
     promptSnippet: "Grep contents",
     promptGuidelines: [
       "Prefer bare identifiers as patterns. Literal queries are most efficient.",
       "Use path for include ('src/', '*.ts') and exclude for noise ('test/,*.min.js').",
       "caseSensitive: true when you need exact case (smart-case otherwise).",
       "After 1-2 greps, read the top match instead of more greps.",
+      "For files outside the workspace, pass an absolute path in 'path' — results come back absolute.",
     ],
     parameters: grepSchema,
 
     async execute(_toolCallId, params, signal) {
       if (signal?.aborted) throw new Error("Operation aborted");
 
-      const f = await ensureFinder(activeCwd);
+      const storedCursor = params.cursor ? getCursor(params.cursor) : undefined;
+      const built = buildQuery(params.path, params.pattern, params.exclude, activeCwd);
+      const root = storedCursor?.root ?? built.root;
+      const f = await getFinderForRoot(root);
       const effectiveLimit = Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT);
-      const query = buildQuery(params.path, params.pattern, params.exclude, activeCwd);
+      const query = built.query;
 
       const hasRegexSyntax =
         params.pattern !== params.pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -601,7 +753,7 @@ export default function fffExtension(pi: ExtensionAPI) {
               text: "Pattern matches everything \u2014 grep needs a concrete substring or identifier. Example: `pattern: 'MyClass'` or `pattern: 'export function'`.",
             },
           ],
-          details: { totalMatched: 0, totalFiles: 0 },
+          details: { totalMatched: 0, totalFiles: 0, truncation: undefined },
         };
       }
 
@@ -611,7 +763,7 @@ export default function fffExtension(pi: ExtensionAPI) {
         mode,
         smartCase,
         maxMatchesPerFile: Math.min(effectiveLimit, 50),
-        cursor: (params.cursor ? getCursor(params.cursor) : null) ?? null,
+        cursor: storedCursor?.cursor ?? null,
         beforeContext: params.context ?? 0,
         afterContext: params.context ?? 0,
         classifyDefinitions: true,
@@ -640,13 +792,14 @@ export default function fffExtension(pi: ExtensionAPI) {
         }
       }
 
-      let output = formatGrepOutput(result);
+      const pathPrefix = root === activeCwd ? "" : `${root}/`;
+      let output = formatGrepOutput(result, pathPrefix);
       const notices: string[] = [];
       if (result.regexFallbackError) {
         notices.push(`Invalid regex: ${result.regexFallbackError}, used literal match`);
       }
       if (result.nextCursor) {
-        notices.push(`Continue with cursor="${storeCursor(result.nextCursor)}"`);
+        notices.push(`Continue with cursor="${storeCursor(result.nextCursor, root)}"`);
       }
 
       if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
@@ -696,7 +849,7 @@ export default function fffExtension(pi: ExtensionAPI) {
     path: Type.Optional(
       Type.String({
         description:
-          "Repo-relative path constraint. Directory prefix (src/ or src/foo/), bare filename with extension (main.rs), or glob (*.ts, src/**/*.cc, {src,lib}/**). Applied to the full repo-relative path.",
+          "Path constraint relative to the workspace: directory prefix (src/ or src/foo/), bare filename with extension (main.rs), or glob (*.ts, src/**/*.cc, {src,lib}/**). Absolute paths outside the workspace are supported: the tool indexes that directory and returns absolute paths.",
       }),
     ),
     exclude: Type.Optional(
@@ -716,30 +869,32 @@ export default function fffExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "fffind",
     label: "fffind",
-    description: `Fuzzy path search and glob search. Matches against the whole repo-relative path, not just the filename. Frecency-ranked, git-aware. Multi-word = narrower (AND). Default limit ${DEFAULT_FIND_LIMIT}.`,
+    description: `Fuzzy path search and glob search. Matches against the whole workspace-relative path, not just the filename. Frecency-ranked, git-aware. Multi-word = narrower (AND). Absolute paths outside the workspace are supported and return absolute paths (first such query builds a temporary index). Default limit ${DEFAULT_FIND_LIMIT}.`,
     promptSnippet: "Find files by path or glob",
     promptGuidelines: [
       "Matches the WHOLE path, not just the filename \u2014 `profile` hits `chrome/browser/profiles/x.cc` too.",
       "Keep queries to 1-2 terms; extra words narrow.",
       "For exact path matches use a glob in `path` \u2014 e.g. path: '**/profile.h' for exact filename, or path: 'src/**/profile.h' scoped to a subtree.",
       "Use exclude: 'test/,*.min.js' to cut noise in large repos.",
+      "For files outside the workspace, pass an absolute path in 'path' — results come back absolute.",
     ],
     parameters: findSchema,
 
     async execute(_toolCallId, params, signal) {
       if (signal?.aborted) throw new Error("Operation aborted");
 
-      const f = await ensureFinder(activeCwd);
-
       const resumed = params.cursor ? getFindCursor(params.cursor) : undefined;
       const effectiveLimit = resumed
         ? resumed.pageSize
         : Math.max(1, params.limit ?? DEFAULT_FIND_LIMIT);
-      const query = resumed
-        ? resumed.query
+      const built = resumed
+        ? undefined
         : buildQuery(params.path, params.pattern, params.exclude, activeCwd);
+      const root = resumed ? resumed.root : (built?.root ?? activeCwd);
+      const query = resumed ? resumed.query : (built?.query ?? params.pattern);
       const pattern = resumed ? resumed.pattern : params.pattern;
       const pageIndex = resumed?.nextPageIndex ?? 0;
+      const f = await getFinderForRoot(root);
 
       const searchResult = f.fileSearch(query, {
         pageIndex,
@@ -748,7 +903,8 @@ export default function fffExtension(pi: ExtensionAPI) {
       if (!searchResult.ok) throw new Error(searchResult.error);
 
       const result = searchResult.value;
-      const formatted = formatFindOutput(result, effectiveLimit, pattern);
+      const pathPrefix = root === activeCwd ? "" : `${root}/`;
+      const formatted = formatFindOutput(result, effectiveLimit, pattern, pathPrefix);
       let output = formatted.output;
 
       const shownSoFar = pageIndex * effectiveLimit + result.items.length;
@@ -769,6 +925,7 @@ export default function fffExtension(pi: ExtensionAPI) {
           pattern,
           pageSize: effectiveLimit,
           nextPageIndex: pageIndex + 1,
+          root,
         });
         notices.push(
           `${remaining} more match${remaining === 1 ? "" : "es"} available. cursor="${cursorId}" to continue`,
@@ -810,7 +967,10 @@ export default function fffExtension(pi: ExtensionAPI) {
         description: "Literal patterns (OR). Include snake_case/camelCase/PascalCase variants.",
       }),
       constraints: Type.Optional(
-        Type.String({ description: "File filter, e.g. '*.{ts,tsx} !test/'" }),
+        Type.String({
+          description:
+            "File filter, e.g. '*.{ts,tsx} !test/'. An absolute path (or ../ escape) as the first token targets that external root; the rest of the filter applies within it. All patterns in one call share one root.",
+        }),
       ),
       context: Type.Optional(Type.Number({ description: "Context lines before+after" })),
       limit: Type.Optional(
@@ -823,7 +983,7 @@ export default function fffExtension(pi: ExtensionAPI) {
       name: "fff-multi-grep",
       label: "fff-multi-grep",
       description:
-        "Search file contents for ANY of multiple literal patterns (OR, SIMD Aho-Corasick). Faster than regex alternation.",
+        "Search file contents for ANY of multiple literal patterns (OR, SIMD Aho-Corasick). Faster than regex alternation. Absolute external roots supported via a leading absolute path in constraints (results absolute).",
       promptSnippet: "Multi-pattern OR content search",
       promptGuidelines: [
         "Use when searching for several identifiers at once.",
@@ -836,15 +996,19 @@ export default function fffExtension(pi: ExtensionAPI) {
         if (signal?.aborted) throw new Error("Operation aborted");
         if (!params.patterns?.length) throw new Error("patterns array must have at least 1 element");
 
-        const f = await ensureFinder(activeCwd);
+        const storedCursor = params.cursor ? getCursor(params.cursor) : undefined;
+        const resolvedFilter = storedCursor
+          ? { root: storedCursor.root, filter: params.constraints }
+          : resolveRootFromFilter(params.constraints, activeCwd);
+        const f = await getFinderForRoot(resolvedFilter.root);
         const effectiveLimit = Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT);
 
         const grepResult = f.multiGrep({
           patterns: params.patterns,
-          constraints: params.constraints,
+          constraints: resolvedFilter.filter,
           maxMatchesPerFile: Math.min(effectiveLimit, 50),
           smartCase: true,
-          cursor: (params.cursor ? getCursor(params.cursor) : null) ?? null,
+          cursor: storedCursor?.cursor ?? null,
           beforeContext: params.context ?? 0,
           afterContext: params.context ?? 0,
         });
@@ -852,13 +1016,14 @@ export default function fffExtension(pi: ExtensionAPI) {
         if (!grepResult.ok) throw new Error(grepResult.error);
 
         const result = grepResult.value;
-        let output = formatGrepOutput(result);
+        const pathPrefix = resolvedFilter.root === activeCwd ? "" : `${resolvedFilter.root}/`;
+        let output = formatGrepOutput(result, pathPrefix);
         const notices: string[] = [];
         if (result.items.length >= effectiveLimit) {
           notices.push(`${effectiveLimit}+ matches (refine patterns)`);
         }
         if (result.nextCursor) {
-          notices.push(`More available. cursor="${storeCursor(result.nextCursor)}" to continue`);
+          notices.push(`More available. cursor="${storeCursor(result.nextCursor, resolvedFilter.root)}" to continue`);
         }
         if (notices.length > 0) output += `\n\n[${notices.join(". ")}]`;
 
