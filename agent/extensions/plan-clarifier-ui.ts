@@ -272,6 +272,11 @@ export default function planClarifierUi(pi: ExtensionAPI) {
 					const wrap = (s: string, color: string = "text") => {
 						for (const line of wrapTextWithAnsi(theme.fg(color as any, s), Math.max(10, width - 2))) add(` ${line}`);
 					};
+					const wrapIndent = (s: string, color: string = "text", indent = 1) => {
+						for (const line of wrapTextWithAnsi(theme.fg(color as any, s), Math.max(10, width - 2 - indent))) {
+							add(" ".repeat(indent) + line);
+						}
+					};
 
 					add(theme.fg("accent", "─".repeat(width)));
 					add(theme.fg("accent", theme.bold(` ${title} `)) + theme.fg("dim", `(${qIndex + 1}/${questions.length})`));
@@ -290,8 +295,8 @@ export default function planClarifierUi(pi: ExtensionAPI) {
 						const rec = o.recommended || i === 0 && !o.synthetic ? theme.fg("success", "  ✅") : "";
 						const text = `${mark} ${o.label}${rec}`;
 						add(prefix + (active ? theme.fg("accent", text) : theme.fg("text", text)));
-						if (o.description) add(`     ${theme.fg("muted", o.description)}`);
-						if (o.synthetic === "custom" && customText.has(q.id)) add(`     ${theme.fg("muted", customText.get(q.id)! )}`);
+						if (o.description) wrapIndent(o.description, "muted", 5);
+						if (o.synthetic === "custom" && customText.has(q.id)) wrapIndent(customText.get(q.id)!, "muted", 5);
 					}
 
 					if (inputMode) {
