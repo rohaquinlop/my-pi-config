@@ -21,6 +21,12 @@
       "command": "jq -r 'select(.input.path) | \"pi-hooks: wrote \" + .input.path'"
     },
     {
+      "id": "check-rust-edits",
+      "event": "postToolUse",
+      "matcher": "write|edit(*.rs)",
+      "command": "cargo fmt && cargo clippy 2>&1"
+    },
+    {
       "id": "inject-style-rule",
       "event": "userPromptSubmit",
       "command": "echo 'Reminder from hooks: respond in Simplified Technical English.'"

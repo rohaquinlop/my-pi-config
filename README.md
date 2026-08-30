@@ -90,13 +90,14 @@ restarting pi.
 | Event | Pi event | Power |
 |---|---|---|
 | `preToolUse` | `tool_call` | block the tool, patch its input |
-| `postToolUse` | `tool_result` | report-only |
+| `postToolUse` | `turn_end` (once per turn, coalesced) | report-only; non-empty stdout is delivered as a visible message |
 | `userPromptSubmit` | `input` + `before_agent_start` | block the prompt, inject context |
 | `sessionStart` | `session_start` | report-only |
 | `sessionEnd` | `session_shutdown` | report-only |
 
-**Schema** (per entry): `id`, `event`, `matcher` (exact tool name or `*`
-glob, tool events only), `command` (string run via `/bin/sh -c`, or array
+**Schema** (per entry): `id`, `event`, `matcher` (tool name, optionally with a
+path glob — `write|edit(*.rs)`; path globs match the tool's `path` input, `*`
+crosses directories), `command` (string run via `/bin/sh -c`, or array
 spawned directly), `timeoutMs` (default 10000), `onError` (`"allow"` default
 or `"block"` for `preToolUse` / `userPromptSubmit`).
 
@@ -105,6 +106,12 @@ or `"block"` for `preToolUse` / `userPromptSubmit`).
 (`preToolUse` only), or `{"action":"continue"}`. Otherwise exit code 0 = allow
 and non-zero = block with stdout as the reason. On `userPromptSubmit`, plain
 non-JSON stdout is injected into the next model request as visible context.
+On `postToolUse`, plain non-JSON stdout is delivered as a visible message
+(stored in the session, sent to the model on the next LLM call) — print
+failures, stay silent on success. `postToolUse` hooks run once per turn, not
+once per tool call: all edits in the turn are collected and passed in one
+payload (`toolNames`, `editedPaths`, `inputs`). Combined output per turn is
+capped at 20 KB, newest blocks first.
 
 **Environment:** hooks get `PI_HOOK_EVENT`, `PI_HOOK_TOOL` (tool events),
 `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and
