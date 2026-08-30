@@ -28,6 +28,7 @@ This repository contains global Pi agent settings, instructions, extensions, ski
     │   ├── plan-clarifier-ui.ts              # Interactive plan clarification TUI (↑↓/Space/Enter)
     │   ├── herdr-agent-state.ts              # Vendor-managed herdr integration (do not edit)
     │   ├── register-agents.ts                # Injects subagent delegation guidance
+    │   ├── pi-hooks.ts                       # Shell-command lifecycle hooks (hooks.json)
     │   ├── agents/                           # Agent definitions (override pi-subagents built-ins)
     │   │   ├── planner.md                    # Implementation planning
     │   │   ├── reviewer.md                   # Code and plan review
@@ -68,6 +69,50 @@ This repository contains global Pi agent settings, instructions, extensions, ski
 | `gh-cli/` | npm package registering `gh_cli` — allowlisted `gh` subcommands with JSON parsing and field extraction. |
 | `web-research/` | npm package registering 3 tools: `web_search` (Brave Search / DuckDuckGo fallback), `web_fetch` (URL → Markdown via Readability), `web_research` (search + fetch top sources → research bundle). |
 | `pdf-reader/` | npm package registering `read_pdf` tool — extracts text from PDFs with page selection, max-page limit, and truncation with temp-file fallback. |
+| `pi-hooks.ts` | Declarative shell-command hooks for pi's lifecycle: `preToolUse` (block/mutate), `postToolUse` (report), `userPromptSubmit` (block/inject), `sessionStart`, `sessionEnd`. Config in `~/.pi/agent/hooks.json` (global) and `.pi/hooks.json` (project). See [Pi Hooks](#pi-hooks) below. |
+
+### Pi Hooks
+
+`pi-hooks.ts` adds Claude-Code-style lifecycle hooks implemented as plain shell
+commands, configured as JSON. Each matched hook gets a JSON payload on stdin.
+
+**Config locations** (merged; project overrides global by `id`):
+
+- `~/.pi/agent/hooks.json` — global, all projects
+- `.pi/hooks.json` — project, trusted projects only
+
+A commented starting point lives at `agent/hooks.example.json`. Config files
+are re-read when their mtime changes — edits apply to the next event without
+restarting pi.
+
+**Events:**
+
+| Event | Pi event | Power |
+|---|---|---|
+| `preToolUse` | `tool_call` | block the tool, patch its input |
+| `postToolUse` | `tool_result` | report-only |
+| `userPromptSubmit` | `input` + `before_agent_start` | block the prompt, inject context |
+| `sessionStart` | `session_start` | report-only |
+| `sessionEnd` | `session_shutdown` | report-only |
+
+**Schema** (per entry): `id`, `event`, `matcher` (exact tool name or `*`
+glob, tool events only), `command` (string run via `/bin/sh -c`, or array
+spawned directly), `timeoutMs` (default 10000), `onError` (`"allow"` default
+or `"block"` for `preToolUse` / `userPromptSubmit`).
+
+**Decision protocol:** if stdout parses as JSON it is the decision —
+`{"action":"block","reason":"..."}`, `{"action":"mutate","input":{...}}`
+(`preToolUse` only), or `{"action":"continue"}`. Otherwise exit code 0 = allow
+and non-zero = block with stdout as the reason. On `userPromptSubmit`, plain
+non-JSON stdout is injected into the next model request as visible context.
+
+**Environment:** hooks get `PI_HOOK_EVENT`, `PI_HOOK_TOOL` (tool events),
+`PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and
+`PI_REASONING_LEVEL`. Hooks run in the current project directory.
+
+**Safety:** hook crashes and timeouts fail open (`onError: "allow"`) with a
+notification; set `"block"` to fail closed. Project hooks never run in
+untrusted projects.
 
 ### Subagent Architecture
 

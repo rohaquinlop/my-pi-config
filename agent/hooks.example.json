@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "hooks": [
+    {
+      "id": "block-rm-rf",
+      "event": "preToolUse",
+      "matcher": "bash",
+      "command": "grep -q 'rm -rf' && { echo 'rm -rf is blocked by pi-hooks'; exit 2; } || true",
+      "onError": "allow"
+    },
+    {
+      "id": "mutate-read-limit",
+      "event": "preToolUse",
+      "matcher": "read",
+      "command": "echo '{\"action\":\"mutate\",\"input\":{\"limit\":100}}'"
+    },
+    {
+      "id": "log-file-writes",
+      "event": "postToolUse",
+      "matcher": "write",
+      "command": "jq -r 'select(.input.path) | \"pi-hooks: wrote \" + .input.path'"
+    },
+    {
+      "id": "inject-style-rule",
+      "event": "userPromptSubmit",
+      "command": "echo 'Reminder from hooks: respond in Simplified Technical English.'"
+    },
+    {
+      "id": "prompt-logger",
+      "event": "userPromptSubmit",
+      "command": "tee -a ~/.pi/agent/hook-prompt-log.jsonl > /dev/null"
+    },
+    {
+      "id": "session-status",
+      "event": "sessionStart",
+      "command": "echo \"session started in $(pwd)\""
+    },
+    {
+      "id": "session-cleanup",
+      "event": "sessionEnd",
+      "command": "echo \"session ended: $(pwd)\""
+    }
+  ]
+}
