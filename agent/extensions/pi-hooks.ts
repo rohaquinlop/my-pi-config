@@ -162,7 +162,7 @@ function statSafe(path: string): FileStamp {
 	}
 }
 
-function readFile(path: string): HooksFile | { error: string } {
+function readFile(path: string): HooksFile | { error: string } | undefined {
 	try {
 		const parsed = JSON.parse(readFileSync(path, "utf8")) as HooksFile;
 		if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.hooks)) {
@@ -173,6 +173,8 @@ function readFile(path: string): HooksFile | { error: string } {
 		}
 		return parsed;
 	} catch (error) {
+		// No config file is the normal case — silent, no hooks.
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		return { error: error instanceof Error ? error.message : String(error) };
 	}
 }
@@ -200,7 +202,7 @@ function loadConfig(ctx: ExtensionContext): CachedConfig {
 	if (unchanged) return cached;
 
 	const globalFile = readFile(GLOBAL_CONFIG_PATH);
-	if ("error" in globalFile) {
+	if (globalFile && "error" in globalFile) {
 		warnOnce(ctx, `pi-hooks: failed to load ${GLOBAL_CONFIG_PATH}: ${globalFile.error}`);
 	}
 
